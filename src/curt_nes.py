@@ -68,16 +68,21 @@ class Mapper(object):
             addr_lookup[ROM_LOW_OFFSET+i] = ROM_LOW_OFFSET + (i % prg_rom_length)
         self._addr_lookup = addr_lookup
 
-    def read_write_lookup(self):
-        """
-        Returns memory array and address lookup to support accessing memory
-        without overhead of a method call.
-        """
-        return self.mem, self._addr_lookup
+    # def resolve_lookup(self):
+    #     """
+    #     Returns memory array and address lookup to support accessing memory
+    #     without overhead of a method call.
+    #     """
+    #     return self._addr_lookup
 
-    # def write(self, addr, value):
-    #     self.mem[self._addr_lookup[addr]] = value
-    #     return self._addr_lookup  # write could signal bank change (this is)
+    def resolve(self, addr16):
+        return self._addr_lookup[addr16]
+
+    def read(self, addr32):
+        return self.mem[addr32]
+
+    def write(self, addr32, value):
+        self.mem[addr32] = value
 
 mappers = {
     mapper.mapper_num: mapper
@@ -90,59 +95,88 @@ def signed8(value):
 def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     pc, sp, a, x, y, p = registers
 
-    # FIXME: this won't work for mappers other than NROM, unless it's read-only
-    mem, addr_lookup = mapper.read_write_lookup()
+    mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
     # Flag setting helpers
-    def set_nz():
-        pass
+    def _set_p_c(p, v):
+        return (p&~0x01) | (v&0x01)
+    def _set_p_nz(p, v):
+        return (p&~0x82) | (v&0x80) | (0x02 if v == 0 else 0)  # set N Z
 
     # Resolve address per mode
     def _resolve_indirect_addr(mem, pc):
-        i = addr_lookup[mem[pc+1]|(mem[pc+2]<<8)]
-        return addr_lookup[mem[i]|(mem[i+1]<<8)]
+        i = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
+        return mapper.resolve(mem[i]|(mem[i+1]<<8))
     def _resolve_relative_addr(mem, pc):
-        return pc + signed8(mem[pc+1])
-
-    # Read / write per address mode
-    def _read_immediate(mem, pc):
+        return pc + signed8(mem[pc+1]) # no need to resolve??
+    def _resolve_immediate(mem, pc):
+        return pc + 1  # no need to resolve
+    def _resolve_zero_page(mem, pc):
         return mem[pc+1]
+    def _resolve_zero_page_indexed_x(mem, pc):
+        return (mem[pc+1]+x)%0x100
+    def _resolve_zero_page_indexed_y(mem, pc):
+        return (mem[pc+1]+y)%0x100
+    def _resolve_absolute(mem, pc):
+        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))))
+    def _resolve_absolute_indexed_x(mem, pc):
+        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+x)%0x10000)
+    def _resolve_absolute_indexed_y(mem, pc):
+        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+y)%0x10000)
+    def _resolve_indexed_indirect(mem, pc):
+        i = (mem[pc+1]+x) % 0x100
+        return mapper.resolve(mem[i]|(mem[i+1]<<8))
+    def _resolve_indirect_indexed(mem, pc):
+        i = (mem[pc+1])
+        return mapper.resolve(((mem[i]|(mem[i+1]<<8))+y)%0x10000)
+
+    # Read helpers
+    def _read_indirect_addr(mem, pc):
+        return mem[_resolve_indirect_addr(mem, pc)]
+    def _read_relative_addr(mem, pc):
+        return mem[_resolve_relative_addr(mem, pc)]
+    def _read_immediate(mem, pc):
+        return mem[_resolve_immediate(mem, pc)]
     def _read_zero_page(mem, pc):
-        return mem[mem[pc+1]]
+        return mem[_resolve_zero_page(mem, pc)]
     def _read_zero_page_indexed_x(mem, pc):
-        return mem[(mem[pc+1]+x)%0x100]
+        return mem[_resolve_zero_page_indexed_x(mem, pc)]
     def _read_zero_page_indexed_y(mem, pc):
-        return mem[(mem[pc+1]+y)%0x100]
+        return mem[_resolve_zero_page_indexed_y(mem, pc)]
     def _read_absolute(mem, pc):
-        return mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8)))]]
+        return mem[_resolve_absolute(mem, pc)]
     def _read_absolute_indexed_x(mem, pc):
-        return mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8))+x)%0x10000]]
+        return mem[_resolve_absolute_indexed_x(mem, pc)]
     def _read_absolute_indexed_y(mem, pc):
-        return mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8))+y)%0x10000]]
+        return mem[_resolve_absolute_indexed_y(mem, pc)]
     def _read_indexed_indirect(mem, pc):
-        i = (mem[pc+1]+x) % 0x100
-        return mem[addr_lookup[mem[i]|(mem[i+1]<<8)]]
+        return mem[_resolve_indexed_indirect(mem, pc)]
     def _read_indirect_indexed(mem, pc):
-        i = (mem[pc+1])
-        return mem[addr_lookup[((mem[i]|(mem[i+1]<<8))+y)%0x10000]]
+        return mem[_resolve_indirect_indexed(mem, pc)]
+
+    # Write helpers
+    def _write_indirect_addr(mem, pc, value):
+        mapper.write(_resolve_indirect_addr(mem, pc), value)
+    def _write_relative_addr(mem, pc, value):
+        mapper.write(_resolve_relative_addr(mem, pc), value)
+    def _write_immediate(mem, pc, value):
+        mapper.write(_resolve_immediate(mem, pc), value)
     def _write_zero_page(mem, pc, value):
-        mem[mem[pc+1]] = value
+        mapper.write(_resolve_zero_page(mem, pc), value)
     def _write_zero_page_indexed_x(mem, pc, value):
-        mem[(mem[pc+1]+x)%0x100] = value
+        mapper.write(_resolve_zero_page_indexed_x(mem, pc), value)
     def _write_zero_page_indexed_y(mem, pc, value):
-        mem[(mem[pc+1]+y)%0x100] = value
+        mapper.write(_resolve_zero_page_indexed_y(mem, pc), value)
     def _write_absolute(mem, pc, value):
-        mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8)))]] = value
+        mapper.write(_resolve_absolute(mem, pc), value)
     def _write_absolute_indexed_x(mem, pc, value):
-        mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8))+x)%0x10000]] = value
+        mapper.write(_resolve_absolute_indexed_x(mem, pc), value)
     def _write_absolute_indexed_y(mem, pc, value):
-        mem[addr_lookup[((mem[pc+1]|(mem[pc+2]<<8))+y)%0x10000]] = value
+        mapper.write(_resolve_absolute_indexed_y(mem, pc), value)
     def _write_indexed_indirect(mem, pc, value):
-        i = (mem[pc+1]+x) % 0x100
-        mem[addr_lookup[mem[i]|(mem[i+1]<<8)]] = value
+        mapper.write(_resolve_indexed_indirect(mem, pc), value)
     def _write_indirect_indexed(mem, pc, value):
-        i = (mem[pc+1])
-        mem[addr_lookup[((mem[i]|(mem[i+1]<<8))+y)%0x10000]] = value
+        mapper.write(_resolve_indirect_indexed(mem, pc), value)
 
     def _build_undefined_op(opcode):
         def undefined_op(pc):
@@ -172,56 +206,56 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal a
         nonlocal p
         a = _read_immediate(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 2
     def _lda_zero_page(pc):
         # Zero Page     LDA $44       $A5  2   3
         nonlocal a
         nonlocal p
         a = _read_zero_page(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 2
     def _lda_zero_page_indexed_x(pc):
         # Zero Page,X   LDA $44,X     $B5  2   4
         nonlocal a
         nonlocal p
         a = _read_zero_page_indexed_x(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 2
     def _lda_absolute(pc):
         # Absolute      LDA $4400     $AD  3   4
         nonlocal a
         nonlocal p
         a = _read_absolute(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 3
     def _lda_absolute_indexed_x(pc):
         # Absolute,X    LDA $4400,X   $BD  3   4+
         nonlocal a
         nonlocal p
         a = _read_absolute_indexed_x(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 3
     def _lda_absolute_indexed_y(pc):
         # Absolute,Y    LDA $4400,Y   $B9  3   4+
         nonlocal a
         nonlocal p
         a = _read_absolute_indexed_y(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 3
     def _lda_indexed_indirect(pc):
         # Indirect,X    LDA ($44,X)   $A1  2   6
         nonlocal a
         nonlocal p
         a = _read_indexed_indirect(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 2
     def _lda_indirect_indexed(pc):
         # Indirect,Y    LDA ($44),Y   $B1  2   5+
         nonlocal a
         nonlocal p
         a = _read_indirect_indexed(mem, pc)
-        p = (p&~0x82) | (a&0x80) | (0x02 if a == 0 else 0)  # set N Z
+        p = _set_p_nz(p, a)
         return pc + 2
     ops[0xA9] = _lda_immediate
     ops[0xA5] = _lda_zero_page
@@ -240,35 +274,35 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal x
         nonlocal p
         x = _read_immediate(mem, pc)
-        p = (p&~0x82) | (x&0x80) | (0x02 if x == 0 else 0)  # set N Z
+        p = _set_p_nz(p, x)
         return pc + 2
     def _ldx_zero_page(pc):
         # Zero Page     LDX $44       $A6  2   3
         nonlocal x
         nonlocal p
         x = _read_zero_page(mem, pc)
-        p = (p&~0x82) | (x&0x80) | (0x02 if x == 0 else 0)  # set N Z
+        p = _set_p_nz(p, x)
         return pc + 2
     def _ldx_zero_page_indexed_y(pc):
         # Zero Page,Y   LDX $44,Y     $B6  2   4
         nonlocal x
         nonlocal p
         x = _read_zero_page_indexed_y(mem, pc)
-        p = (p&~0x82) | (x&0x80) | (0x02 if x == 0 else 0)  # set N Z
+        p = _set_p_nz(p, x)
         return pc + 2
     def _ldx_absolute(pc):
         # Absolute      LDX $4400     $AE  3   4
         nonlocal x
         nonlocal p
         x = _read_absolute(mem, pc)
-        p = (p&~0x82) | (x&0x80) | (0x02 if x == 0 else 0)  # set N Z
+        p = _set_p_nz(p, x)
         return pc + 3
     def _ldx_absolute_indexed_y(pc):
         # Absolute,Y    LDX $4400,Y   $BE  3   4+
         nonlocal x
         nonlocal p
         x = _read_absolute_indexed_y(mem, pc)
-        p = (p&~0x82) | (x&0x80) | (0x02 if x == 0 else 0)  # set N Z
+        p = _set_p_nz(p, x)
         return pc + 3
     ops[0xA2] = _ldx_immediate
     ops[0xA6] = _ldx_zero_page
@@ -284,35 +318,35 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal y
         nonlocal p
         y = _read_immediate(mem, pc)
-        p = (p&~0x82) | (y&0x80) | (0x02 if y == 0 else 0)  # set N Z
+        p = _set_p_nz(p, y)
         return pc + 2
     def _ldy_zero_page(pc):
         # Zero Page     LDY $44       $A4  2   3
         nonlocal y
         nonlocal p
         y = _read_zero_page(mem, pc)
-        p = (p&~0x82) | (y&0x80) | (0x02 if y == 0 else 0)  # set N Z
+        p = _set_p_nz(p, y)
         return pc + 2
     def _ldy_zero_page_indexed_x(pc):
         # Zero Page,X   LDY $44,X     $B4  2   4
         nonlocal y
         nonlocal p
         y = _read_zero_page_indexed_x(mem, pc)
-        p = (p&~0x82) | (y&0x80) | (0x02 if y == 0 else 0)  # set N Z
+        p = _set_p_nz(p, y)
         return pc + 2
     def _ldy_absolute(pc):
         # Absolute      LDY $4400     $AC  3   4
         nonlocal y
         nonlocal p
         y = _read_absolute(mem, pc)
-        p = (p&~0x82) | (y&0x80) | (0x02 if y == 0 else 0)  # set N Z
+        p = _set_p_nz(p, y)
         return pc + 3
     def _ldy_absolute_indexed_x(pc):
         # Absolute,X    LDY $4400,X   $BC  3   4+
         nonlocal y
         nonlocal p
         y = _read_absolute_indexed_x(mem, pc)
-        p = (p&~0x82) | (y&0x80) | (0x02 if y == 0 else 0)  # set N Z
+        p = _set_p_nz(p, y)
         return pc + 3
     ops[0xA0] = _ldy_immediate
     ops[0xA4] = _ldy_zero_page
@@ -323,12 +357,37 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # LSR (Logical Shift Right)
     # Affects Flags: N Z C
     # LSR shifts all bits right one position. 0 is shifted into bit 7 and the original bit 0 is shifted into the Carry.
-    # MODE           SYNTAX       HEX LEN TIM
-    # Accumulator   LSR A         $4A  1   2
-    # Zero Page     LSR $44       $46  2   5
-    # Zero Page,X   LSR $44,X     $56  2   6
+    def _lsr_accumulator(pc):
+        # MODE           SYNTAX       HEX LEN TIM
+        # Accumulator   LSR A         $4A  1   2
+        nonlocal a
+        nonlocal p
+        p = _set_p_c(p, a)
+        a >>= 1
+        p = _set_p_nz(p, a)
+        return pc + 1
+    def _lsr_zero_page(pc):
+        # Zero Page     LSR $44       $46  2   5
+        nonlocal p
+        v = _read_zero_page(mem, pc)
+        p = _set_p_c(p, v)
+        v >>= 1
+        _write_zero_page(mem, pc, v)
+        p = _set_p_nz(p, v)
+        return pc + 2
+    def _lsr_zero_page_indexed_x(pc):
+        # Zero Page,X   LSR $44,X     $56  2   6
+        nonlocal p
+        v = _read_zero_page_indexed_x(mem, pc)
+        p = _set_p_c(p, v)
+        v >>= 1
+        _write_zero_page_indexed_x(mem, pc, v)
+        p = _set_p_nz(p, v)
+        return pc + 2
     # Absolute      LSR $4400     $4E  3   6
     # Absolute,X    LSR $4400,X   $5E  3   7
+    ops[0x4A] = _lsr_accumulator
+    ops[0x46] = _lsr_zero_page
 
     try:
         while True:

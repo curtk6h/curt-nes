@@ -3,6 +3,9 @@ import array
 
 from curt_nes import play, Mapper
 
+# TODO:
+# - test how page crossing impacts timing
+
 class TestOperations(unittest.TestCase):
     @staticmethod
     def _build_mapper(prg_rom, chr_rom=b'', mapper_cls=Mapper):
@@ -11,13 +14,19 @@ class TestOperations(unittest.TestCase):
             mem[0x8000+i] = value
         return mapper_cls(mem, 2, 0)
 
-    def _test_play(self, prg_rom, expected_registers, mem_patches=[], x=0x00, y=0x00):
+    def _test_play(self, prg_rom, expected_registers, mem_patches=[], a=0x00, x=0x00, y=0x00, expected_mem=[]):
         mapper = TestOperations._build_mapper(prg_rom)
         for i, values in mem_patches:
             for j, value in enumerate(values):
                 mapper.mem[i+j] = value
-        registers, t = play(mapper, (0x8000, 0x00, 0x00, x, y, 0x00))
+
+        registers, t = play(mapper, (0x8000, 0x00, a, x, y, 0x00))
+
         self.assertTupleEqual(registers, expected_registers)
+        for addr, expected_mem_bytes in expected_mem:
+            self.assertEqual(
+                bytearray(mapper.mem[addr:len(expected_mem_bytes)]),
+                expected_mem_bytes)
 
     # Test NOP!
 
@@ -100,7 +109,7 @@ class TestOperations(unittest.TestCase):
         self._test_play(b'\xB1\xC0\x00', (0x8002, 0x00, 0x37, 0x01, 0x0F, 0x00), mem_patches=[(0x00C0, b'\x00\xC0'), (0xC00F, b'\x37')], x=0x01, y=0x0F)
         self._test_play(b'\xB1\xFF\x00', (0x8002, 0x00, 0x37, 0x01, 0x0F, 0x00), mem_patches=[(0x00FF, b'\x00\xC0'), (0xC00F, b'\x37')], x=0x01, y=0x0F)
 
-    # Test all operations
+    # Test all operations (besides LDA which is tested thoroughly above)
 
     def test_ldx(self):
         self._test_play(b'\xA2\x37\x00', (0x8002, 0x00, 0x00, 0x37, 0x00, 0x00))
@@ -115,3 +124,7 @@ class TestOperations(unittest.TestCase):
         self._test_play(b'\xB4\x00\x00', (0x8002, 0x00, 0x00, 0x0F, 0x37, 0x00), mem_patches=[(0x0F, b'\x37')], x=0x0F)
         self._test_play(b'\xAC\x00\x80\x00', (0x8003, 0x00, 0x00, 0x00, 0xAC, 0x80))
         self._test_play(b'\xBC\x00\x80\x00', (0x8003, 0x00, 0x00, 0x01, 0x00, 0x02), x=0x01, y=0x0F)
+
+    def test_lsr(self):
+        self._test_play(b'\x4A\x00', (0x8001, 0x00, 0x37, 0x00, 0x00, 0x01), a=0x6F)
+        self._test_play(b'\x46\x00\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x01), mem_patches=[(0x00, b'\x37')], expected_mem=[(0x00, b'\x1B')])
