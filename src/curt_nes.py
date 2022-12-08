@@ -36,14 +36,14 @@ ROM_HIGH_OFFSET          = 0xC000
 TOTAL_MEMORY             = 0x10000
 
 # Processor status
-CARRY_FLAG = 0
-ZERO_FLAG = 1
-INTERRUPT_DISABLE_FLAG = 2
-DECIMAL_MODE_FLAG = 3
-BREAK_COMMAND_FLAG = 4
-_UNUSED_FLAG = 5
-OVERFLOW_FLAG = 6
-NEGATIVE_FLAG = 7
+C = 1 << 0 # carry
+Z = 1 << 1 # zero
+I = 1 << 2 # interrupt disable
+D = 1 << 3 # decimal mode
+B = 1 << 4 # break command
+_ = 1 << 5 # unused
+V = 1 << 6 # overflow
+N = 1 << 7 # negative
 
 class VMStop(Exception):
     pass
@@ -95,13 +95,10 @@ def signed8(value):
 def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     pc, sp, a, x, y, p = registers
 
-    mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
+    # TODO: expand this vertically / hardcode!
+    c, z, i, d, b, _, v, n = tuple(p&(1<<p_i) for p_i in range(8))  # status flags (no reason to keep packed)
 
-    # Flag setting helpers
-    def _set_p_c(p, v):
-        return (p&~0x01) | (v&0x01)
-    def _set_p_nz(p, v):
-        return (p&~0x82) | (v&0x80) | (0x02 if v == 0 else 0)  # set N Z
+    mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
     # Resolve address per mode
     def _resolve_indirect_addr(mem, pc):
@@ -130,54 +127,6 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         i = (mem[pc+1])
         return mapper.resolve(((mem[i]|(mem[i+1]<<8))+y)%0x10000)
 
-    # Read helpers
-    def _read_indirect_addr(mem, pc):
-        return mem[_resolve_indirect_addr(mem, pc)]
-    def _read_relative_addr(mem, pc):
-        return mem[_resolve_relative_addr(mem, pc)]
-    def _read_immediate(mem, pc):
-        return mem[_resolve_immediate(mem, pc)]
-    def _read_zero_page(mem, pc):
-        return mem[_resolve_zero_page(mem, pc)]
-    def _read_zero_page_indexed_x(mem, pc):
-        return mem[_resolve_zero_page_indexed_x(mem, pc)]
-    def _read_zero_page_indexed_y(mem, pc):
-        return mem[_resolve_zero_page_indexed_y(mem, pc)]
-    def _read_absolute(mem, pc):
-        return mem[_resolve_absolute(mem, pc)]
-    def _read_absolute_indexed_x(mem, pc):
-        return mem[_resolve_absolute_indexed_x(mem, pc)]
-    def _read_absolute_indexed_y(mem, pc):
-        return mem[_resolve_absolute_indexed_y(mem, pc)]
-    def _read_indexed_indirect(mem, pc):
-        return mem[_resolve_indexed_indirect(mem, pc)]
-    def _read_indirect_indexed(mem, pc):
-        return mem[_resolve_indirect_indexed(mem, pc)]
-
-    # Write helpers
-    def _write_indirect_addr(mem, pc, value):
-        mapper.write(_resolve_indirect_addr(mem, pc), value)
-    def _write_relative_addr(mem, pc, value):
-        mapper.write(_resolve_relative_addr(mem, pc), value)
-    def _write_immediate(mem, pc, value):
-        mapper.write(_resolve_immediate(mem, pc), value)
-    def _write_zero_page(mem, pc, value):
-        mapper.write(_resolve_zero_page(mem, pc), value)
-    def _write_zero_page_indexed_x(mem, pc, value):
-        mapper.write(_resolve_zero_page_indexed_x(mem, pc), value)
-    def _write_zero_page_indexed_y(mem, pc, value):
-        mapper.write(_resolve_zero_page_indexed_y(mem, pc), value)
-    def _write_absolute(mem, pc, value):
-        mapper.write(_resolve_absolute(mem, pc), value)
-    def _write_absolute_indexed_x(mem, pc, value):
-        mapper.write(_resolve_absolute_indexed_x(mem, pc), value)
-    def _write_absolute_indexed_y(mem, pc, value):
-        mapper.write(_resolve_absolute_indexed_y(mem, pc), value)
-    def _write_indexed_indirect(mem, pc, value):
-        mapper.write(_resolve_indexed_indirect(mem, pc), value)
-    def _write_indirect_indexed(mem, pc, value):
-        mapper.write(_resolve_indirect_indexed(mem, pc), value)
-
     def _build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -185,209 +134,1426 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
 
     ops = [_build_undefined_op(opcode) for opcode in range(0x100)]
 
-    # Placeholder (should be BRK)
-    def _stop(pc):
+    # ADC (ADd with Carry)
+    # Writes flags: N V Z C
+    def _69_adc_immediate(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 2
+        return pc + 2
+    def _65_adc_zero_page(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_zero_page(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 3
+        return pc + 2
+    def _75_adc_zero_page_indexed_x(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 4
+        return pc + 2
+    def _6d_adc_absolute(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_absolute(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 4
+        return pc + 3
+    def _7d_adc_absolute_indexed_x(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_absolute_indexed_x(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _79_adc_absolute_indexed_y(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_absolute_indexed_y(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _61_adc_indexed_indirect(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_indexed_indirect(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 6
+        return pc + 2
+    def _71_adc_indirect_indexed(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_indirect_indexed(mem, pc)]
+        r = m + a + (p&C)
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # AND (bitwise AND with accumulator)
+    # Writes flags: N Z
+    def _29_and_immediate(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _25_and_zero_page(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _35_and_zero_page_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _2d_and_absolute(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _3d_and_absolute_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _39_and_absolute_indexed_y(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _21_and_indexed_indirect(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _31_and_indirect_indexed(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # ASL (Arithmetic Shift Left)
+    # Writes flags: N Z C
+    def _0a_asl_accumulator(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_accumulator(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 1
+    def _06_asl_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 2
+    def _16_asl_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _0e_asl_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    def _1e_asl_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 7
+        return pc + 3
+    
+    # BIT (test BITs)
+    # Writes flags: N V Z
+    def _24_bit_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _2c_bit_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    
+    # Branch Instructions
+    # Writes flags: none
+    # All branches are relative mode and have a length of two bytes. Syntax is "Bxx Displacement" or (better) "Bxx Label". See the notes on the Program Counter for more on displacements.
+    # 
+    # Branches are dependant on the status of the flag bits when the op code is encountered. A branch not taken requires two machine cycles. Add one if the branch is taken and add one more if the branch crosses a page boundary.
+    # 
+    # There is no BRA (BRanch Always) instruction but it can be easily emulated by branching on the basis of a known condition. One of the best flags to use for this purpose is the oVerflow which is unchanged by all but addition and subtraction operations.
+    # A page boundary crossing occurs when the branch destination is on a different page than the instruction AFTER the branch instruction. For example:
+    # 
+    # SEC
+    #   BCS LABEL
+    #   NOP
+    # A page boundary crossing occurs (i.e. the BCS takes 4 cycles) when (the address of) LABEL and the NOP are on different pages. This means that
+    #         CLV
+    #         BVC LABEL
+    #   LABEL NOP
+    # the BVC instruction will take 3 cycles no matter what address it is located at.
+    # BPL (Branch on PLus)
+    def _10_bpl(pc):
+        nonlocal t
+        return pc + None
+    # BMI (Branch on MInus)
+    def _30_bmi(pc):
+        nonlocal t
+        return pc + None
+    # BVC (Branch on oVerflow Clear)
+    def _00_bvc(pc):
+        nonlocal t
+        return pc + None
+    # BVS (Branch on oVerflow Set)
+    def _70_bvs(pc):
+        nonlocal t
+        return pc + None
+    # BCC (Branch on Carry Clear)
+    def _90_bcc(pc):
+        nonlocal t
+        return pc + None
+    # BCS (Branch on Carry Set)
+    def _b0_bcs(pc):
+        nonlocal t
+        return pc + None
+    # BNE (Branch on Not Equal)
+    def _d0_bne(pc):
+        nonlocal t
+        return pc + None
+    # BEQ (Branch on EQual)
+    def _f0_beq(pc):
+        nonlocal t
+        return pc + None
+    
+    # BRK (BReaK)
+    # Writes flags: B
+    def _00_brk_implied(pc):
+        # nonlocal t, p
+        # b = (p&B)
+        # t += 7
+        # return pc + 1
         raise VMStop()
-    ops[0x00] = _stop
-
-    # NOP (No OPeration)
-    # Affects Flags: none
-    def _nop(pc):
-        # MODE           SYNTAX       HEX LEN TIM
-        # Implied       NOP           $EA  1   2
-        return pc + 1
-    ops[0xEA] = _nop
-
+    
+    # CMP (CoMPare accumulator)
+    # Writes flags: N Z C
+    # Compare sets flags as if a subtraction had been carried out. If the value in the accumulator is equal or greater than the compared value, the Carry will be set. The equal (Z) and negative (N) flags will be set based on equality or lack thereof and the sign (i.e. A>=$80) of the accumulator.
+    def _c9_cmp_immediate(pc):
+        nonlocal t, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _c5_cmp_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _d5_cmp_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _cd_cmp_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _dd_cmp_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _d9_cmp_absolute_indexed_y(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _c1_cmp_indexed_indirect(pc):
+        nonlocal t, p
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _d1_cmp_indirect_indexed(pc):
+        nonlocal t, p
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # CPX (ComPare X register)
+    # Writes flags: N Z C
+    def _e0_cpx_immediate(pc):
+        nonlocal t, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _e4_cpx_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _ec_cpx_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    
+    # CPY (ComPare Y register)
+    # Writes flags: N Z C
+    def _c0_cpy_immediate(pc):
+        nonlocal t, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _c4_cpy_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _cc_cpy_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    
+    # DEC (DECrement memory)
+    # Writes flags: N Z
+    def _c6_dec_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 2
+    def _d6_dec_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _ce_dec_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    def _de_dec_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 7
+        return pc + 3
+    
+    # EOR (bitwise Exclusive OR)
+    # Writes flags: N Z
+    def _49_eor_immediate(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _45_eor_zero_page(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _55_eor_zero_page_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _4d_eor_absolute(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _5d_eor_absolute_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _59_eor_absolute_indexed_y(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _41_eor_indexed_indirect(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _51_eor_indirect_indexed(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # Flag (Processor Status) Instructions
+    # Writes flags: as noted
+    # These instructions are implied mode, have a length of one byte and require two machine cycles.
+    # 
+    # Notes:
+    #   The Interrupt flag is used to prevent (SEI) or enable (CLI) maskable interrupts (aka IRQ's). It does not signal the presence or absence of an interrupt condition. The 6502 will set this flag automatically in response to an interrupt and restore it to its prior status on completion of the interrupt service routine. If you want your interrupt service routine to permit other maskable interrupts, you must clear the I flag in your code.
+    # 
+    # The Decimal flag controls how the 6502 adds and subtracts. If set, arithmetic is carried out in packed binary coded decimal. This flag is unchanged by interrupts and is unknown on power-up. The implication is that a CLD should be included in boot or interrupt coding.
+    # 
+    # The Overflow flag is generally misunderstood and therefore under-utilised. After an ADC or SBC instruction, the overflow flag will be set if the twos complement result is less than -128 or greater than +127, and it will cleared otherwise. In twos complement, $80 through $FF represents -128 through -1, and $00 through $7F represents 0 through +127. Thus, after:
+    # 
+    # CLC
+    #   LDA #$7F ;   +127
+    #   ADC #$01 ; +   +1
+    # the overflow flag is 1 (+127 + +1 = +128), and after:
+    #   CLC
+    #   LDA #$81 ;   -127
+    #   ADC #$FF ; +   -1
+    # the overflow flag is 0 (-127 + -1 = -128). The overflow flag is not affected by increments, decrements, shifts and logical operations i.e. only ADC, BIT, CLV, PLP, RTI and SBC affect it. There is no op code to set the overflow but a BIT test on an RTS instruction will do the trick.
+    # CLC (CLear Carry)
+    def _18_clc(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # SEC (SEt Carry)
+    def _38_sec(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # CLI (CLear Interrupt)
+    def _58_cli(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # SEI (SEt Interrupt)
+    def _78_sei(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # CLV (CLear oVerflow)
+    def _b8_clv(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # CLD (CLear Decimal)
+    def _d8_cld(pc):
+        nonlocal t, p
+    
+        return pc + None
+    # SED (SEt Decimal)
+    def _f8_sed(pc):
+        nonlocal t, p
+    
+        return pc + None
+    
+    # INC (INCrement memory)
+    # Writes flags: N Z
+    def _e6_inc_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 2
+    def _f6_inc_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _ee_inc_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    def _fe_inc_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 7
+        return pc + 3
+    
+    # JMP (JuMP)
+    # Writes flags: none
+    def _4c_jmp_absolute(pc):
+        nonlocal t
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 3
+    def _6c_jmp_indirect(pc):
+        nonlocal t
+        addr32 = _resolve_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 3
+    
+    # JSR (Jump to SubRoutine)
+    # Writes flags: none
+    def _20_jsr_absolute(pc):
+        nonlocal t
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    
     # LDA (LoaD Accumulator)
-    # Affects Flags: N Z
-    def _lda_immediate(pc):
-        # MODE           SYNTAX       HEX LEN TIM
-        # Immediate     LDA #$44      $A9  2   2
-        nonlocal a
-        nonlocal p
-        a = _read_immediate(mem, pc)
-        p = _set_p_nz(p, a)
+    # Writes flags: N Z
+    def _a9_lda_immediate(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_immediate(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 2
         return pc + 2
-    def _lda_zero_page(pc):
-        # Zero Page     LDA $44       $A5  2   3
-        nonlocal a
-        nonlocal p
-        a = _read_zero_page(mem, pc)
-        p = _set_p_nz(p, a)
+    def _a5_lda_zero_page(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_zero_page(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 3
         return pc + 2
-    def _lda_zero_page_indexed_x(pc):
-        # Zero Page,X   LDA $44,X     $B5  2   4
-        nonlocal a
-        nonlocal p
-        a = _read_zero_page_indexed_x(mem, pc)
-        p = _set_p_nz(p, a)
+    def _b5_lda_zero_page_indexed_x(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 4
         return pc + 2
-    def _lda_absolute(pc):
-        # Absolute      LDA $4400     $AD  3   4
-        nonlocal a
-        nonlocal p
-        a = _read_absolute(mem, pc)
-        p = _set_p_nz(p, a)
+    def _ad_lda_absolute(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_absolute(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 4
         return pc + 3
-    def _lda_absolute_indexed_x(pc):
-        # Absolute,X    LDA $4400,X   $BD  3   4+
-        nonlocal a
-        nonlocal p
-        a = _read_absolute_indexed_x(mem, pc)
-        p = _set_p_nz(p, a)
+    def _bd_lda_absolute_indexed_x(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_absolute_indexed_x(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
-    def _lda_absolute_indexed_y(pc):
-        # Absolute,Y    LDA $4400,Y   $B9  3   4+
-        nonlocal a
-        nonlocal p
-        a = _read_absolute_indexed_y(mem, pc)
-        p = _set_p_nz(p, a)
+    def _b9_lda_absolute_indexed_y(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_absolute_indexed_y(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
-    def _lda_indexed_indirect(pc):
-        # Indirect,X    LDA ($44,X)   $A1  2   6
-        nonlocal a
-        nonlocal p
-        a = _read_indexed_indirect(mem, pc)
-        p = _set_p_nz(p, a)
+    def _a1_lda_indexed_indirect(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_indexed_indirect(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 6
         return pc + 2
-    def _lda_indirect_indexed(pc):
-        # Indirect,Y    LDA ($44),Y   $B1  2   5+
-        nonlocal a
-        nonlocal p
-        a = _read_indirect_indexed(mem, pc)
-        p = _set_p_nz(p, a)
+    def _b1_lda_indirect_indexed(pc):
+        nonlocal t, a, p
+        a = mem[_resolve_indirect_indexed(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
+        t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
-    ops[0xA9] = _lda_immediate
-    ops[0xA5] = _lda_zero_page
-    ops[0xB5] = _lda_zero_page_indexed_x
-    ops[0xAD] = _lda_absolute
-    ops[0xBD] = _lda_absolute_indexed_x
-    ops[0xB9] = _lda_absolute_indexed_y
-    ops[0xA1] = _lda_indexed_indirect
-    ops[0xB1] = _lda_indirect_indexed
-
+    
     # LDX (LoaD X register)
-    # Affects Flags: N Z
-    def _ldx_immediate(pc):
-        # MODE           SYNTAX       HEX LEN TIM
-        # Immediate     LDX #$44      $A2  2   2
-        nonlocal x
-        nonlocal p
-        x = _read_immediate(mem, pc)
-        p = _set_p_nz(p, x)
+    # Writes flags: N Z
+    def _a2_ldx_immediate(pc):
+        nonlocal t, x, p
+        x = mem[_resolve_immediate(mem, pc)]
+        p = (0x00 if x else Z) | (x & N)
+        t += 2
         return pc + 2
-    def _ldx_zero_page(pc):
-        # Zero Page     LDX $44       $A6  2   3
-        nonlocal x
-        nonlocal p
-        x = _read_zero_page(mem, pc)
-        p = _set_p_nz(p, x)
+    def _a6_ldx_zero_page(pc):
+        nonlocal t, x, p
+        x = mem[_resolve_zero_page(mem, pc)]
+        p = (0x00 if x else Z) | (x & N)
+        t += 3
         return pc + 2
-    def _ldx_zero_page_indexed_y(pc):
-        # Zero Page,Y   LDX $44,Y     $B6  2   4
-        nonlocal x
-        nonlocal p
-        x = _read_zero_page_indexed_y(mem, pc)
-        p = _set_p_nz(p, x)
+    def _b6_ldx_zero_page_indexed_y(pc):
+        nonlocal t, x, p
+        x = mem[_resolve_zero_page_indexed_y(mem, pc)]
+        p = (0x00 if x else Z) | (x & N)
+        t += 4
         return pc + 2
-    def _ldx_absolute(pc):
-        # Absolute      LDX $4400     $AE  3   4
-        nonlocal x
-        nonlocal p
-        x = _read_absolute(mem, pc)
-        p = _set_p_nz(p, x)
+    def _ae_ldx_absolute(pc):
+        nonlocal t, x, p
+        x = mem[_resolve_absolute(mem, pc)]
+        p = (0x00 if x else Z) | (x & N)
+        t += 4
         return pc + 3
-    def _ldx_absolute_indexed_y(pc):
-        # Absolute,Y    LDX $4400,Y   $BE  3   4+
-        nonlocal x
-        nonlocal p
-        x = _read_absolute_indexed_y(mem, pc)
-        p = _set_p_nz(p, x)
+    def _be_ldx_absolute_indexed_y(pc):
+        nonlocal t, x, p
+        x = mem[_resolve_absolute_indexed_y(mem, pc)]
+        p = (0x00 if x else Z) | (x & N)
+        t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
-    ops[0xA2] = _ldx_immediate
-    ops[0xA6] = _ldx_zero_page
-    ops[0xB6] = _ldx_zero_page_indexed_y
-    ops[0xAE] = _ldx_absolute
-    ops[0xBE] = _ldx_absolute_indexed_y
-
+    
     # LDY (LoaD Y register)
-    # Affects Flags: N Z
-    def _ldy_immediate(pc):
-        # MODE           SYNTAX       HEX LEN TIM
-        # Immediate     LDY #$44      $A0  2   2
-        nonlocal y
-        nonlocal p
-        y = _read_immediate(mem, pc)
-        p = _set_p_nz(p, y)
+    # Writes flags: N Z
+    def _a0_ldy_immediate(pc):
+        nonlocal t, y, p
+        y = mem[_resolve_immediate(mem, pc)]
+        p = (0x00 if y else Z) | (y & N)
+        t += 2
         return pc + 2
-    def _ldy_zero_page(pc):
-        # Zero Page     LDY $44       $A4  2   3
-        nonlocal y
-        nonlocal p
-        y = _read_zero_page(mem, pc)
-        p = _set_p_nz(p, y)
+    def _a4_ldy_zero_page(pc):
+        nonlocal t, y, p
+        y = mem[_resolve_zero_page(mem, pc)]
+        p = (0x00 if y else Z) | (y & N)
+        t += 3
         return pc + 2
-    def _ldy_zero_page_indexed_x(pc):
-        # Zero Page,X   LDY $44,X     $B4  2   4
-        nonlocal y
-        nonlocal p
-        y = _read_zero_page_indexed_x(mem, pc)
-        p = _set_p_nz(p, y)
+    def _b4_ldy_zero_page_indexed_x(pc):
+        nonlocal t, y, p
+        y = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        p = (0x00 if y else Z) | (y & N)
+        t += 4
         return pc + 2
-    def _ldy_absolute(pc):
-        # Absolute      LDY $4400     $AC  3   4
-        nonlocal y
-        nonlocal p
-        y = _read_absolute(mem, pc)
-        p = _set_p_nz(p, y)
+    def _ac_ldy_absolute(pc):
+        nonlocal t, y, p
+        y = mem[_resolve_absolute(mem, pc)]
+        p = (0x00 if y else Z) | (y & N)
+        t += 4
         return pc + 3
-    def _ldy_absolute_indexed_x(pc):
-        # Absolute,X    LDY $4400,X   $BC  3   4+
-        nonlocal y
-        nonlocal p
-        y = _read_absolute_indexed_x(mem, pc)
-        p = _set_p_nz(p, y)
+    def _bc_ldy_absolute_indexed_x(pc):
+        nonlocal t, y, p
+        y = mem[_resolve_absolute_indexed_x(mem, pc)]
+        p = (0x00 if y else Z) | (y & N)
+        t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
-    ops[0xA0] = _ldy_immediate
-    ops[0xA4] = _ldy_zero_page
-    ops[0xB4] = _ldy_zero_page_indexed_x
-    ops[0xAC] = _ldy_absolute
-    ops[0xBC] = _ldy_absolute_indexed_x
-
+    
     # LSR (Logical Shift Right)
-    # Affects Flags: N Z C
-    # LSR shifts all bits right one position. 0 is shifted into bit 7 and the original bit 0 is shifted into the Carry.
-    def _lsr_accumulator(pc):
-        # MODE           SYNTAX       HEX LEN TIM
-        # Accumulator   LSR A         $4A  1   2
-        nonlocal a
-        nonlocal p
-        p = _set_p_c(p, a)
-        a >>= 1
-        p = _set_p_nz(p, a)
+    # Writes flags: N Z C
+    def _4a_lsr_accumulator(pc):
+        nonlocal t, a, p
+        r = a >> 1
+        p = (a & C) | (0x00 if r else Z) | (r & N)
+        a = r
+        t += 2
         return pc + 1
-    def _lsr_zero_page(pc):
-        # Zero Page     LSR $44       $46  2   5
-        nonlocal p
-        v = _read_zero_page(mem, pc)
-        p = _set_p_c(p, v)
-        v >>= 1
-        _write_zero_page(mem, pc, v)
-        p = _set_p_nz(p, v)
+    def _46_lsr_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m >> 1
+        p = (m & C) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r)
+        t += 5
         return pc + 2
-    def _lsr_zero_page_indexed_x(pc):
-        # Zero Page,X   LSR $44,X     $56  2   6
-        nonlocal p
-        v = _read_zero_page_indexed_x(mem, pc)
-        p = _set_p_c(p, v)
-        v >>= 1
-        _write_zero_page_indexed_x(mem, pc, v)
-        p = _set_p_nz(p, v)
+    def _56_lsr_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m >> 1
+        p = (m & C) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r)
+        t += 6
         return pc + 2
-    # Absolute      LSR $4400     $4E  3   6
-    # Absolute,X    LSR $4400,X   $5E  3   7
-    ops[0x4A] = _lsr_accumulator
-    ops[0x46] = _lsr_zero_page
+    def _4e_lsr_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m >> 1
+        p = (m & C) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r)
+        t += 6
+        return pc + 3
+    def _5e_lsr_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m >> 1
+        p = (m & C) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r)
+        t += 7
+        return pc + 3
+    
+    # NOP (No OPeration)
+    # Writes flags: none
+    def _ea_nop_implied(pc):
+        nonlocal t
+        t += 2
+        return pc + 1
+    
+    # ORA (bitwise OR with Accumulator)
+    # Writes flags: N Z
+    def _09_ora_immediate(pc):
+        nonlocal t, a, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _05_ora_zero_page(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _15_ora_zero_page_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _0d_ora_absolute(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _1d_ora_absolute_indexed_x(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _19_ora_absolute_indexed_y(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _01_ora_indexed_indirect(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _11_ora_indirect_indexed(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # Register Instructions
+    # Writes flags: N Z
+    # These instructions are implied mode, have a length of one byte and require two machine cycles.
+    # TAX (Transfer A to X)
+    def _aa_tax(pc):
+        nonlocal t, x, p
+    
+        return pc + None
+    # TXA (Transfer X to A)
+    def _8a_txa(pc):
+        nonlocal t, a, p
+    
+        return pc + None
+    # DEX (DEcrement X)
+    def _ca_dex(pc):
+        nonlocal t, x, p
+    
+        return pc + None
+    # INX (INcrement X)
+    def _e8_inx(pc):
+        nonlocal t, x, p
+    
+        return pc + None
+    # TAY (Transfer A to Y)
+    def _a8_tay(pc):
+        nonlocal t, y, p
+    
+        return pc + None
+    # TYA (Transfer Y to A)
+    def _98_tya(pc):
+        nonlocal t, a, p
+    
+        return pc + None
+    # DEY (DEcrement Y)
+    def _88_dey(pc):
+        nonlocal t, y, p
+    
+        return pc + None
+    # INY (INcrement Y)
+    def _c8_iny(pc):
+        nonlocal t, y, p
+    
+        return pc + None
+    
+    # ROL (ROtate Left)
+    # Writes flags: N Z C
+    def _2a_rol_accumulator(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_accumulator(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 1
+    def _26_rol_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 2
+    def _36_rol_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _2e_rol_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    def _3e_rol_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 7
+        return pc + 3
+    
+    # ROR (ROtate Right)
+    # Writes flags: N Z C
+    def _6a_ror_accumulator(pc):
+        nonlocal t, a, p
+        addr32 = _resolve_accumulator(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 1
+    def _66_ror_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 2
+    def _76_ror_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _6e_ror_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 3
+    def _7e_ror_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 7
+        return pc + 3
+    
+    # RTI (ReTurn from Interrupt)
+    # Writes flags: all
+    def _40_rti_implied(pc):
+        nonlocal t, p
+        addr32 = _resolve_implied(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 1
+    
+    # RTS (ReTurn from Subroutine)
+    # Writes flags: none
+    def _60_rts_implied(pc):
+        nonlocal t
+        addr32 = _resolve_implied(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 1
+    
+    # SBC (SuBtract with Carry)
+    # Writes flags: N V Z C
+    # SBC results are dependant on the setting of the decimal flag. In decimal mode, subtraction is carried out on the assumption that the values involved are packed BCD (Binary Coded Decimal).
+    # There is no way to subtract without the carry which works as an inverse borrow. i.e, to subtract you set the carry before the operation. If the carry is cleared by the operation, it indicates a borrow occurred.
+    def _e9_sbc_immediate(pc):
+        nonlocal t, p
+        m = mem[_resolve_immediate(mem, pc)]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 2
+        return pc + 2
+    def _e5_sbc_zero_page(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _f5_sbc_zero_page_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _ed_sbc_absolute(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _fd_sbc_absolute_indexed_x(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _f9_sbc_absolute_indexed_y(pc):
+        nonlocal t, p
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 4 # + add 1 cycle if page boundary crossed
+        return pc + 3
+    def _e1_sbc_indexed_indirect(pc):
+        nonlocal t, p
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _f1_sbc_indirect_indexed(pc):
+        nonlocal t, p
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        mapper.write(addr32, r&0xFF)
+        t += 5 # + add 1 cycle if page boundary crossed
+        return pc + 2
+    
+    # STA (STore Accumulator)
+    # Writes flags: none
+    def _85_sta_zero_page(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _95_sta_zero_page_indexed_x(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _8d_sta_absolute(pc):
+        nonlocal t
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    def _9d_sta_absolute_indexed_x(pc):
+        nonlocal t
+        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 3
+    def _99_sta_absolute_indexed_y(pc):
+        nonlocal t
+        addr32 = _resolve_absolute_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 5
+        return pc + 3
+    def _81_sta_indexed_indirect(pc):
+        nonlocal t
+        addr32 = _resolve_indexed_indirect(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    def _91_sta_indirect_indexed(pc):
+        nonlocal t
+        addr32 = _resolve_indirect_indexed(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 6
+        return pc + 2
+    
+    # Stack Instructions
+    # 
+    # These instructions are implied mode, have a length of one byte and require machine cycles as indicated. The "PuLl" operations are known as "POP" on most other microprocessors. With the 6502, the stack is always on page one ($100-$1FF) and works top down.
+    # TXS (Transfer X to Stack ptr)
+    def _9a_txs(pc):
+        nonlocal t, sp
+    
+        return pc + None
+    # TSX (Transfer Stack ptr to X)
+    def _ba_tsx(pc):
+        nonlocal t, x
+    
+        return pc + None
+    # PHA (PusH Accumulator)
+    def _48_pha(pc):
+        nonlocal t, sp
+    
+        return pc + None
+    # PLA (PuLl Accumulator)
+    def _68_pla(pc):
+        nonlocal t, a
+    
+        return pc + None
+    # PHP (PusH Processor status)
+    def _08_php(pc):
+        nonlocal t, sp
+    
+        return pc + None
+    # PLP (PuLl Processor status)
+    def _28_plp(pc):
+        nonlocal t, p
+    
+        return pc + None
+    
+    # STX (STore X register)
+    # Writes flags: none
+    def _86_stx_zero_page(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _96_stx_zero_page_indexed_y(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page_indexed_y(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _8e_stx_absolute(pc):
+        nonlocal t
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    
+    # STY (STore Y register)
+    # Writes flags: none
+    def _84_sty_zero_page(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 3
+        return pc + 2
+    def _94_sty_zero_page_indexed_x(pc):
+        nonlocal t
+        addr32 = _resolve_zero_page_indexed_x(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 2
+    def _8c_sty_absolute(pc):
+        nonlocal t
+        addr32 = _resolve_absolute(mem, pc)
+        m = mem[addr32]
+        r = m  # do something here
+        mapper.write(addr32, r&0xFF)
+        t += 4
+        return pc + 3
+    
+    ops[0x69] = _69_adc_immediate
+    ops[0x65] = _65_adc_zero_page
+    ops[0x75] = _75_adc_zero_page_indexed_x
+    ops[0x6d] = _6d_adc_absolute
+    ops[0x7d] = _7d_adc_absolute_indexed_x
+    ops[0x79] = _79_adc_absolute_indexed_y
+    ops[0x61] = _61_adc_indexed_indirect
+    ops[0x71] = _71_adc_indirect_indexed
+    ops[0x29] = _29_and_immediate
+    ops[0x25] = _25_and_zero_page
+    ops[0x35] = _35_and_zero_page_indexed_x
+    ops[0x2d] = _2d_and_absolute
+    ops[0x3d] = _3d_and_absolute_indexed_x
+    ops[0x39] = _39_and_absolute_indexed_y
+    ops[0x21] = _21_and_indexed_indirect
+    ops[0x31] = _31_and_indirect_indexed
+    ops[0x0a] = _0a_asl_accumulator
+    ops[0x06] = _06_asl_zero_page
+    ops[0x16] = _16_asl_zero_page_indexed_x
+    ops[0x0e] = _0e_asl_absolute
+    ops[0x1e] = _1e_asl_absolute_indexed_x
+    ops[0x24] = _24_bit_zero_page
+    ops[0x2c] = _2c_bit_absolute
+    ops[0x10] = _10_bpl
+    ops[0x30] = _30_bmi
+    ops[0x00] = _00_bvc
+    ops[0x70] = _70_bvs
+    ops[0x90] = _90_bcc
+    ops[0xb0] = _b0_bcs
+    ops[0xd0] = _d0_bne
+    ops[0xf0] = _f0_beq
+    ops[0x00] = _00_brk_implied
+    ops[0xc9] = _c9_cmp_immediate
+    ops[0xc5] = _c5_cmp_zero_page
+    ops[0xd5] = _d5_cmp_zero_page_indexed_x
+    ops[0xcd] = _cd_cmp_absolute
+    ops[0xdd] = _dd_cmp_absolute_indexed_x
+    ops[0xd9] = _d9_cmp_absolute_indexed_y
+    ops[0xc1] = _c1_cmp_indexed_indirect
+    ops[0xd1] = _d1_cmp_indirect_indexed
+    ops[0xe0] = _e0_cpx_immediate
+    ops[0xe4] = _e4_cpx_zero_page
+    ops[0xec] = _ec_cpx_absolute
+    ops[0xc0] = _c0_cpy_immediate
+    ops[0xc4] = _c4_cpy_zero_page
+    ops[0xcc] = _cc_cpy_absolute
+    ops[0xc6] = _c6_dec_zero_page
+    ops[0xd6] = _d6_dec_zero_page_indexed_x
+    ops[0xce] = _ce_dec_absolute
+    ops[0xde] = _de_dec_absolute_indexed_x
+    ops[0x49] = _49_eor_immediate
+    ops[0x45] = _45_eor_zero_page
+    ops[0x55] = _55_eor_zero_page_indexed_x
+    ops[0x4d] = _4d_eor_absolute
+    ops[0x5d] = _5d_eor_absolute_indexed_x
+    ops[0x59] = _59_eor_absolute_indexed_y
+    ops[0x41] = _41_eor_indexed_indirect
+    ops[0x51] = _51_eor_indirect_indexed
+    ops[0x18] = _18_clc
+    ops[0x38] = _38_sec
+    ops[0x58] = _58_cli
+    ops[0x78] = _78_sei
+    ops[0xb8] = _b8_clv
+    ops[0xd8] = _d8_cld
+    ops[0xf8] = _f8_sed
+    ops[0xe6] = _e6_inc_zero_page
+    ops[0xf6] = _f6_inc_zero_page_indexed_x
+    ops[0xee] = _ee_inc_absolute
+    ops[0xfe] = _fe_inc_absolute_indexed_x
+    ops[0x4c] = _4c_jmp_absolute
+    ops[0x6c] = _6c_jmp_indirect
+    ops[0x20] = _20_jsr_absolute
+    ops[0xa9] = _a9_lda_immediate
+    ops[0xa5] = _a5_lda_zero_page
+    ops[0xb5] = _b5_lda_zero_page_indexed_x
+    ops[0xad] = _ad_lda_absolute
+    ops[0xbd] = _bd_lda_absolute_indexed_x
+    ops[0xb9] = _b9_lda_absolute_indexed_y
+    ops[0xa1] = _a1_lda_indexed_indirect
+    ops[0xb1] = _b1_lda_indirect_indexed
+    ops[0xa2] = _a2_ldx_immediate
+    ops[0xa6] = _a6_ldx_zero_page
+    ops[0xb6] = _b6_ldx_zero_page_indexed_y
+    ops[0xae] = _ae_ldx_absolute
+    ops[0xbe] = _be_ldx_absolute_indexed_y
+    ops[0xa0] = _a0_ldy_immediate
+    ops[0xa4] = _a4_ldy_zero_page
+    ops[0xb4] = _b4_ldy_zero_page_indexed_x
+    ops[0xac] = _ac_ldy_absolute
+    ops[0xbc] = _bc_ldy_absolute_indexed_x
+    ops[0x4a] = _4a_lsr_accumulator
+    ops[0x46] = _46_lsr_zero_page
+    ops[0x56] = _56_lsr_zero_page_indexed_x
+    ops[0x4e] = _4e_lsr_absolute
+    ops[0x5e] = _5e_lsr_absolute_indexed_x
+    ops[0xea] = _ea_nop_implied
+    ops[0x09] = _09_ora_immediate
+    ops[0x05] = _05_ora_zero_page
+    ops[0x15] = _15_ora_zero_page_indexed_x
+    ops[0x0d] = _0d_ora_absolute
+    ops[0x1d] = _1d_ora_absolute_indexed_x
+    ops[0x19] = _19_ora_absolute_indexed_y
+    ops[0x01] = _01_ora_indexed_indirect
+    ops[0x11] = _11_ora_indirect_indexed
+    ops[0xaa] = _aa_tax
+    ops[0x8a] = _8a_txa
+    ops[0xca] = _ca_dex
+    ops[0xe8] = _e8_inx
+    ops[0xa8] = _a8_tay
+    ops[0x98] = _98_tya
+    ops[0x88] = _88_dey
+    ops[0xc8] = _c8_iny
+    ops[0x2a] = _2a_rol_accumulator
+    ops[0x26] = _26_rol_zero_page
+    ops[0x36] = _36_rol_zero_page_indexed_x
+    ops[0x2e] = _2e_rol_absolute
+    ops[0x3e] = _3e_rol_absolute_indexed_x
+    ops[0x6a] = _6a_ror_accumulator
+    ops[0x66] = _66_ror_zero_page
+    ops[0x76] = _76_ror_zero_page_indexed_x
+    ops[0x6e] = _6e_ror_absolute
+    ops[0x7e] = _7e_ror_absolute_indexed_x
+    ops[0x40] = _40_rti_implied
+    ops[0x60] = _60_rts_implied
+    ops[0xe9] = _e9_sbc_immediate
+    ops[0xe5] = _e5_sbc_zero_page
+    ops[0xf5] = _f5_sbc_zero_page_indexed_x
+    ops[0xed] = _ed_sbc_absolute
+    ops[0xfd] = _fd_sbc_absolute_indexed_x
+    ops[0xf9] = _f9_sbc_absolute_indexed_y
+    ops[0xe1] = _e1_sbc_indexed_indirect
+    ops[0xf1] = _f1_sbc_indirect_indexed
+    ops[0x85] = _85_sta_zero_page
+    ops[0x95] = _95_sta_zero_page_indexed_x
+    ops[0x8d] = _8d_sta_absolute
+    ops[0x9d] = _9d_sta_absolute_indexed_x
+    ops[0x99] = _99_sta_absolute_indexed_y
+    ops[0x81] = _81_sta_indexed_indirect
+    ops[0x91] = _91_sta_indirect_indexed
+    ops[0x9a] = _9a_txs
+    ops[0xba] = _ba_tsx
+    ops[0x48] = _48_pha
+    ops[0x68] = _68_pla
+    ops[0x08] = _08_php
+    ops[0x28] = _28_plp
+    ops[0x86] = _86_stx_zero_page
+    ops[0x96] = _96_stx_zero_page_indexed_y
+    ops[0x8e] = _8e_stx_absolute
+    ops[0x84] = _84_sty_zero_page
+    ops[0x94] = _94_sty_zero_page_indexed_x
+    ops[0x8c] = _8c_sty_absolute
 
     try:
         while True:
