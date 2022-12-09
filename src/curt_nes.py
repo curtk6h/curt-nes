@@ -15,25 +15,32 @@
 
 import array
 
-# Interrupt
-INTERRUPT_OFFSET = 0xFFFA
-NMI_OFFSET = 0xFFFA
-RESET_OFFSET = 0xFFFC
-IRQ_OFFSET = 0xFFFE
-
-# Memory
-RAM_ZERO_PAGE_OFFSET     = 0x0000
-RAM_STACK_OFFSET         = 0x0100
+# Memory addressing
+ZERO_PAGE_OFFSET         = 0x0000
+STACK_OFFSET             = 0x0100
+TOP_OF_STACK_OFFSET      = 0x0200
 RAM_OFFSET               = 0x0200
+RAM_SIZE                 = 0x0800
 RAM_MIRRORS_OFFSET       = 0x0800
-IO_REGISTERS_OFFSET      = 0x2000
-IO_MIRRORS_OFFSET        = 0x2008
-IO_MORE_REGISTERS_OFFSET = 0x4000
+RAM_MIRRORS_SIZE         = 0x1800
+PPU_REGS_OFFSET          = 0x2000
+PPU_REGS_SIZE            = 0x0008
+PPU_REG_MIRRORS_OFFSET   = 0x2008
+PPU_REG_MIRRORS_SIZE     = 0x1FF8
+APU_REGS_OFFSET          = 0x4000
+APU_REGS_SIZE            = 0x0020  # end 8 bytes are for "APU and I/O functionality that is normally disabled"
 EXPANSION_ROM_OFFSET     = 0x4020
 SRAM_OFFSET              = 0x6000
-ROM_LOW_OFFSET           = 0x8000
-ROM_HIGH_OFFSET          = 0xC000
-TOTAL_MEMORY             = 0x10000
+ROM_LOWER_BANK_OFFSET    = 0x8000
+ROM_BANK_SIZE            = 0x4000
+ROM_UPPER_BANK_OFFSET    = 0xC000
+TOTAL_ADDRESS_SPACE      = 0x10000
+
+# Interrupt addresses
+INTERRUPT_OFFSET         = 0xFFFA
+NMI_OFFSET               = 0xFFFA
+RESET_OFFSET             = 0xFFFC
+IRQ_OFFSET               = 0xFFFE
 
 # Processor status
 C = 1 << 0 # carry
@@ -61,11 +68,20 @@ class Mapper(object):
         self.mem = mem
         self.num_prg_rom_banks = num_prg_rom_banks
         self.num_chr_rom_banks = num_chr_rom_banks
+        
         # Build address lookup (registers not included)
-        addr_lookup = array.array('H', (i for i in range(0x10000)))
-        prg_rom_length = num_prg_rom_banks * 0x4000
+        addr_lookup = array.array('H', (i for i in range(TOTAL_ADDRESS_SPACE)))
+        # first, the rom space
+        prg_rom_length = num_prg_rom_banks * ROM_BANK_SIZE
         for i in range(0x8000):  # connected/addressable 2 * 16 KB banks
-            addr_lookup[ROM_LOW_OFFSET+i] = ROM_LOW_OFFSET + (i % prg_rom_length)
+            addr_lookup[ROM_LOWER_BANK_OFFSET+i] = ROM_LOWER_BANK_OFFSET + (i % prg_rom_length)
+        # then RAM mirrors
+        for i in range(RAM_MIRRORS_SIZE):
+            addr_lookup[RAM_MIRRORS_OFFSET+i] = i % RAM_SIZE
+        # then PPU mirrors
+        for i in range(PPU_REG_MIRRORS_SIZE):
+            addr_lookup[PPU_REG_MIRRORS_OFFSET+i] = i % PPU_REGS_SIZE
+
         self._addr_lookup = addr_lookup
 
     # def resolve_lookup(self):
@@ -95,8 +111,7 @@ def signed8(value):
 def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     pc, sp, a, x, y, p = registers
 
-    # TODO: expand this vertically / hardcode!
-    c, z, i, d, b, _, v, n = tuple(p&(1<<p_i) for p_i in range(8))  # status flags (no reason to keep packed)
+    # NOTE: consider flag names reserved: c, z, i, d, b, v, n
 
     mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
