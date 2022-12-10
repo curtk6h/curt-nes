@@ -18,6 +18,7 @@ import array
 # Memory addressing
 ZERO_PAGE_OFFSET         = 0x0000
 STACK_OFFSET             = 0x0100
+STACK_SIZE               = 0x0100
 TOP_OF_STACK_OFFSET      = 0x0200
 RAM_OFFSET               = 0x0200
 RAM_SIZE                 = 0x0800
@@ -42,7 +43,7 @@ NMI_OFFSET               = 0xFFFA
 RESET_OFFSET             = 0xFFFC
 IRQ_OFFSET               = 0xFFFE
 
-# Processor status
+# Processor statuses
 C = 1 << 0 # carry
 Z = 1 << 1 # zero
 I = 1 << 2 # interrupt disable
@@ -62,7 +63,6 @@ class Mapper(object):
     and the cartidge mapper chip.
     """
     mapper_num = 0
-    # bank_registers = []
 
     def __init__(self, mem, num_prg_rom_banks, num_chr_rom_banks):
         self.mem = mem
@@ -80,7 +80,7 @@ class Mapper(object):
             addr_lookup[RAM_MIRRORS_OFFSET+i] = i % RAM_SIZE
         # then PPU mirrors
         for i in range(PPU_REG_MIRRORS_SIZE):
-            addr_lookup[PPU_REG_MIRRORS_OFFSET+i] = i % PPU_REGS_SIZE
+            addr_lookup[PPU_REG_MIRRORS_OFFSET+i] = PPU_REGS_OFFSET + (i%PPU_REGS_SIZE)
 
         self._addr_lookup = addr_lookup
 

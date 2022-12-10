@@ -6,6 +6,61 @@ from curt_nes import play, Mapper
 # TODO:
 # - test how page crossing impacts timing
 
+class TestMapper(unittest.TestCase):
+    empty_mem = array.array('B', (0 for _ in range(0x10000)))
+
+    def test_ram_mappings(self):
+        mapper = Mapper(self.empty_mem, 1, 0)
+        # $0000-$07FF	$0800	2KB internal RAM
+        for i in range(0x0000, 0x0800):
+            self.assertEqual(mapper.resolve(i), i)
+        # $0800-$0FFF	$0800	Mirrors of $0000-$07FF
+        for i in range(0x0800, 0x1000):
+            self.assertEqual(mapper.resolve(i), i-0x0800)
+        # $1000-$17FF	$0800
+        for i in range(0x1000, 0x1800):
+            self.assertEqual(mapper.resolve(i), i-0x1000)
+        # $1800-$1FFF	$0800
+        for i in range(0x1800, 0x2000):
+            self.assertEqual(mapper.resolve(i), i-0x1800)
+
+    def test_ppu_mappings(self):
+        mapper = Mapper(self.empty_mem, 1, 0)
+        # $2000-$2007	$0008	NES PPU registers
+        for i in range(0x2000, 0x2008):
+            self.assertEqual(mapper.resolve(i), i)
+        # $2008-$3FFF	$1FF8	Mirrors of $2000-2007 (repeats every 8 bytes)
+        for i in range(0x2008, 0x4000):
+            self.assertEqual(mapper.resolve(i), 0x2000+(i%8))
+
+    def test_apu_mappings(self):
+        mapper = Mapper(self.empty_mem, 1, 0)
+        # $4000-$4017	$0018	NES APU and I/O registers
+        for i in range(0x4000, 0x4018):
+            self.assertEqual(mapper.resolve(i), i)
+        # $4018-$401F	$0008	APU and I/O functionality that is normally disabled. See CPU Test Mode.
+        for i in range(0x4018, 0x4020):
+            self.assertEqual(mapper.resolve(i), i)
+
+    def test_misc_cart_mappings(self):
+        mapper = Mapper(self.empty_mem, 1, 0)
+        for i in range(0x4018, 0x8000):
+            self.assertEqual(mapper.resolve(i), i)
+
+    def test_rom_one_bank_mappings(self):
+        mapper = Mapper(self.empty_mem, 1, 0)
+        # $4020-$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (See Note)
+        for i in range(0x8000, 0xC000):
+            self.assertEqual(mapper.resolve(i), i)
+        for i in range(0xC000, 0x10000):
+            self.assertEqual(mapper.resolve(i), 0x8000+(i-0xC000))
+
+    def test_rom_two_bank_mappings(self):
+        mapper = Mapper(self.empty_mem, 2, 0)
+        # $4020-$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (See Note)
+        for i in range(0x8000, 0x10000):
+            self.assertEqual(mapper.resolve(i), i)
+
 class TestOperations(unittest.TestCase):
     @staticmethod
     def _build_mapper(prg_rom, chr_rom=b'', mapper_cls=Mapper):
@@ -128,3 +183,11 @@ class TestOperations(unittest.TestCase):
     def test_lsr(self):
         self._test_play(b'\x4A\x00', (0x8001, 0x00, 0x37, 0x00, 0x00, 0x01), a=0x6F)
         self._test_play(b'\x46\x00\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x01), mem_patches=[(0x00, b'\x37')], expected_mem=[(0x00, b'\x1B')])
+        # TODO: test remaining address modes
+
+    def test_adc(self):
+        # TODO:
+        # test permutations of carry flag
+        # test permutations overflow
+        # test all address modes in basic manor
+        pass
