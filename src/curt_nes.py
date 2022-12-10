@@ -151,64 +151,64 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 2
         return pc + 2
     def _65_adc_zero_page(pc):
         nonlocal t, a, p
         m = mem[_resolve_zero_page(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 3
         return pc + 2
     def _75_adc_zero_page_indexed_x(pc):
         nonlocal t, a, p
         m = mem[_resolve_zero_page_indexed_x(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 4
         return pc + 2
     def _6d_adc_absolute(pc):
         nonlocal t, a, p
         m = mem[_resolve_absolute(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 4
         return pc + 3
     def _7d_adc_absolute_indexed_x(pc):
         nonlocal t, a, p
         m = mem[_resolve_absolute_indexed_x(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _79_adc_absolute_indexed_y(pc):
         nonlocal t, a, p
         m = mem[_resolve_absolute_indexed_y(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _61_adc_indexed_indirect(pc):
         nonlocal t, a, p
         m = mem[_resolve_indexed_indirect(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 6
         return pc + 2
     def _71_adc_indirect_indexed(pc):
         nonlocal t, a, p
         m = mem[_resolve_indirect_indexed(mem, pc)]
         r = m + a + (p&C)
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
-        a = r
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        a = r & 0xFF
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
     
@@ -216,73 +216,50 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z
     def _29_and_immediate(pc):
         nonlocal t, a, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_immediate(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 2
         return pc + 2
     def _25_and_zero_page(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_zero_page(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 3
         return pc + 2
     def _35_and_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 4
         return pc + 2
     def _2d_and_absolute(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_absolute(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 4
         return pc + 3
     def _3d_and_absolute_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_absolute_indexed_x(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _39_and_absolute_indexed_y(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_absolute_indexed_y(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _21_and_indexed_indirect(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_indexed_indirect(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 6
         return pc + 2
     def _31_and_indirect_indexed(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        a &= mem[_resolve_indirect_indexed(mem, pc)]
+        p = (0x00 if a else Z) | (a & N)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
     
@@ -290,19 +267,17 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z C
     def _0a_asl_accumulator(pc):
         nonlocal t, a, p
-        addr32 = _resolve_accumulator(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
-        mapper.write(addr32, r&0xFF)
+        r = a << 1
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
+        a = r & 0xFF
         t += 2
         return pc + 1
     def _06_asl_zero_page(pc):
         nonlocal t, p
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        r = m << 1
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -310,8 +285,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        r = m << 1
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -319,8 +294,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        r = m << 1
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -328,8 +303,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        r = m << 1
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -341,7 +316,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -350,7 +325,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -421,7 +396,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -430,7 +405,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -439,7 +414,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 2
@@ -448,7 +423,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -457,7 +432,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -466,7 +441,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -475,7 +450,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -484,7 +459,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
@@ -495,7 +470,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -504,7 +479,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -513,7 +488,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -524,7 +499,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -533,7 +508,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -542,7 +517,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -554,7 +529,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -563,7 +538,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -572,7 +547,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -581,7 +556,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -592,7 +567,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -601,7 +576,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -610,7 +585,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 2
@@ -619,7 +594,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -628,7 +603,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -637,7 +612,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -646,7 +621,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -655,7 +630,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
@@ -722,7 +697,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -731,7 +706,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -740,7 +715,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -749,7 +724,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -906,7 +881,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _4a_lsr_accumulator(pc):
         nonlocal t, a, p
         r = a >> 1
-        p = (a & C) | (0x00 if r else Z) | (r & N)
+        p = (a & C) | (0x00 if (r&0xFF) else Z) | (r & N)
         a = r
         t += 2
         return pc + 1
@@ -915,7 +890,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if r else Z) | (r & N)
+        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r)
         t += 5
         return pc + 2
@@ -924,7 +899,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if r else Z) | (r & N)
+        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r)
         t += 6
         return pc + 2
@@ -933,7 +908,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if r else Z) | (r & N)
+        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r)
         t += 6
         return pc + 3
@@ -942,7 +917,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if r else Z) | (r & N)
+        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r)
         t += 7
         return pc + 3
@@ -960,7 +935,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -969,7 +944,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -978,7 +953,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 2
@@ -987,7 +962,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -996,7 +971,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -1005,7 +980,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -1014,7 +989,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -1023,7 +998,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if r else Z) | (r & N)
+        p = (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
@@ -1079,7 +1054,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_accumulator(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 1
@@ -1088,7 +1063,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -1097,7 +1072,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -1106,7 +1081,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -1115,7 +1090,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -1127,7 +1102,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_accumulator(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 1
@@ -1136,7 +1111,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -1145,7 +1120,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -1154,7 +1129,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -1163,7 +1138,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -1175,7 +1150,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_implied(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 1
@@ -1199,7 +1174,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -1208,7 +1183,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -1217,7 +1192,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 2
@@ -1226,7 +1201,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -1235,7 +1210,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -1244,7 +1219,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
@@ -1253,7 +1228,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -1262,7 +1237,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (r >> 8) | (0x00 if r else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
+        p = (r >> 8) | (0x00 if (r&0xFF) else Z) | ((((a^r)&(m^r))>>1) & V) | (r & N)
         mapper.write(addr32, r&0xFF)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
