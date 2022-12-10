@@ -6,12 +6,8 @@
 # TODO:
 # * build tiny sample rom that runs in working emulator
 #   * create .cfg file
-#   * 
-# * finish mapper (mirroring)
-# * test mapper
-
 # FUTURE OPTIMIZATIONS:
-# * use lookups to set flags
+# * use "massive" lookups to set flags, do more!
 
 import array
 

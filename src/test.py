@@ -69,19 +69,28 @@ class TestOperations(unittest.TestCase):
             mem[0x8000+i] = value
         return mapper_cls(mem, 2, 0)
 
-    def _test_play(self, prg_rom, expected_registers, mem_patches=[], a=0x00, x=0x00, y=0x00, expected_mem=[]):
+    def _test_play(self, prg_rom, expected_registers, mem_patches=[], a=0x00, x=0x00, y=0x00, expected_mem_patches=[]):
         mapper = TestOperations._build_mapper(prg_rom)
         for i, values in mem_patches:
             for j, value in enumerate(values):
                 mapper.mem[i+j] = value
 
+        expected_mem = bytearray(mapper.mem)
+
         registers, t = play(mapper, (0x8000, 0x00, a, x, y, 0x00))
 
         self.assertTupleEqual(registers, expected_registers)
-        for addr, expected_mem_bytes in expected_mem:
+
+        for addr, expected_mem_bytes in expected_mem_patches:
+            start = addr
+            end = addr + len(expected_mem_bytes)
+            expected_mem[start:end] = mapper.mem[start:end]
             self.assertEqual(
-                bytearray(mapper.mem[addr:len(expected_mem_bytes)]),
+                bytearray(mapper.mem[start:end]),
                 expected_mem_bytes)
+
+        # Ensure memory other than what was patched, wasn't touched
+        self.assertEqual(mapper.mem, expected_mem)
 
     # Test NOP!
 
@@ -182,8 +191,11 @@ class TestOperations(unittest.TestCase):
 
     def test_lsr(self):
         self._test_play(b'\x4A\x00', (0x8001, 0x00, 0x37, 0x00, 0x00, 0x01), a=0x6F)
-        self._test_play(b'\x46\x00\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x01), mem_patches=[(0x00, b'\x37')], expected_mem=[(0x00, b'\x1B')])
-        # TODO: test remaining address modes
+        self._test_play(b'\x4A\x00', (0x8001, 0x00, 0x37, 0x00, 0x00, 0x00), a=0x6E)
+        self._test_play(b'\x46\x00\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x01), mem_patches=[(0x00, b'\x6F')], expected_mem_patches=[(0x00, b'\x37')])
+        self._test_play(b'\x56\x00\x00', (0x8002, 0x00, 0x00, 0x0F, 0x00, 0x01), mem_patches=[(0x0F, b'\x6F')], x=0x0F, expected_mem_patches=[(0x0F, b'\x37')])
+        self._test_play(b'\x4E\x00\x02\x00', (0x8003, 0x00, 0x00, 0x00, 0x00, 0x01), mem_patches=[(0x0200, b'\x6F')], expected_mem_patches=[(0x0200, b'\x37')])
+        self._test_play(b'\x5E\x00\x02\x00', (0x8003, 0x00, 0x00, 0x0F, 0x00, 0x01), mem_patches=[(0x020F, b'\x6F')], x=0x0F, expected_mem_patches=[(0x020F, b'\x37')])
 
     def test_adc(self):
         # TODO:
