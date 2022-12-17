@@ -123,9 +123,9 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         i = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
         return mapper.resolve(mem[i]|(mem[i+1]<<8))
     def _resolve_relative_addr(mem, pc):
-        return pc + signed8(mem[pc+1]) # no need to resolve??
+        return pc + 2 + signed8(mem[pc+1])
     def _resolve_immediate(mem, pc):
-        return pc + 1  # no need to resolve
+        return pc + 1
     def _resolve_zero_page(mem, pc):
         return mem[pc+1]
     def _resolve_zero_page_indexed_x(mem, pc):
@@ -143,6 +143,10 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return mapper.resolve(mem[i]|(mem[i+1]<<8))
     def _resolve_indirect_indexed(mem, pc):
         i = (mem[pc+1])
+        # TODO: +1 for page crossings
+        # addr = mem[i]+y
+        # t += addr>>8
+        # (addr+(mem[i+1]<<8))
         return mapper.resolve(((mem[i]|(mem[i+1]<<8))+y)%0x10000)
 
     def _build_undefined_op(opcode):
@@ -351,41 +355,81 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # BPL (Branch on PLus)
     def _10_bpl(pc):
         nonlocal t
-        return pc + None
+        if p & N:
+            t += 2
+            return pc + 2
+        else:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
     # BMI (Branch on MInus)
     def _30_bmi(pc):
         nonlocal t
-        return pc + None
+        if p & N:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
+        else:
+            t += 2
+            return pc + 2
     # BVC (Branch on oVerflow Clear)
-    def _00_bvc(pc):
+    def _50_bvc(pc):
         nonlocal t
-        return pc + None
+        if p & V:
+            t += 2
+            return pc + 2
+        else:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
     # BVS (Branch on oVerflow Set)
     def _70_bvs(pc):
         nonlocal t
-        return pc + None
+        if p & V:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
+        else:
+            t += 2
+            return pc + 2
     # BCC (Branch on Carry Clear)
     def _90_bcc(pc):
         nonlocal t
-        return pc + None
+        if p & C:
+            t += 2
+            return pc + 2
+        else:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
     # BCS (Branch on Carry Set)
     def _b0_bcs(pc):
         nonlocal t
-        return pc + None
+        if p & C:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
+        else:
+            t += 2
+            return pc + 2
     # BNE (Branch on Not Equal)
     def _d0_bne(pc):
         nonlocal t
-        return pc + None
+        if p & Z:
+            t += 2
+            return pc + 2
+        else:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
     # BEQ (Branch on EQual)
     def _f0_beq(pc):
         nonlocal t
-        return pc + None
+        if p & Z:
+            t += 3  # +1 if page crossed
+            return _resolve_relative_addr(mem, pc)
+        else:
+            t += 2
+            return pc + 2
     
     # BRK (BReaK)
     # Writes flags: B
     def _00_brk_implied(pc):
         # nonlocal t, p
-        # b = (p&B)
+        # b = p & B
         # t += 7
         # return pc + 1
         raise VMStop()
@@ -1413,7 +1457,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     ops[0x2c] = _2c_bit_absolute
     ops[0x10] = _10_bpl
     ops[0x30] = _30_bmi
-    ops[0x00] = _00_bvc
+    ops[0x50] = _50_bvc
     ops[0x70] = _70_bvs
     ops[0x90] = _90_bcc
     ops[0xb0] = _b0_bcs
