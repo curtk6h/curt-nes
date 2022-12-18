@@ -69,7 +69,7 @@ class TestOperations(unittest.TestCase):
             mem[0x8000+i] = value
         return mapper_cls(mem, 2, 0)
 
-    def _test_play(self, prg_rom, expected_registers, expected_t=None, pc=0x8000, sp=0x00, a=0x00, x=0x00, y=0x00, p=0x00, mem_patches=[], expected_mem_patches=[]):
+    def _test_play(self, prg_rom, expected_registers, expected_t=None, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, mem_patches=[], expected_mem_patches=[]):
         mapper = TestOperations._build_mapper(prg_rom)
         for i, values in mem_patches:
             for j, value in enumerate(values):
@@ -77,7 +77,7 @@ class TestOperations(unittest.TestCase):
 
         expected_mem = bytearray(mapper.mem)
 
-        registers, t = play(mapper, (pc, sp, a, x, y, p))
+        registers, t = play(mapper, (pc, s, a, x, y, p))
 
         self.assertTupleEqual(registers, expected_registers)
 
@@ -376,3 +376,21 @@ class TestOperations(unittest.TestCase):
     def test_sed(self):
         self._test_play(b'\xF8', (0x8001, 0x00, 0x00, 0x00, 0x00, 0xFF), 2, p=0xF7)
         self._test_play(b'\xF8', (0x8001, 0x00, 0x00, 0x00, 0x00, 0x08), 2, p=0x00)
+
+    def test_inc(self):
+        self._test_play(b'\xE6\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x00), 5, mem_patches=[(0x00, b'\x12')], expected_mem_patches=[(0x00, b'\x13')])
+        self._test_play(b'\xE6\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x02), 5, mem_patches=[(0x00, b'\xFF')], expected_mem_patches=[(0x00, b'\x00')]) # zero
+        self._test_play(b'\xE6\x00', (0x8002, 0x00, 0x00, 0x00, 0x00, 0x80), 5, mem_patches=[(0x00, b'\x80')], expected_mem_patches=[(0x00, b'\x81')]) # negative
+        self._test_play(b'\xF6\x00', (0x8002, 0x00, 0x00, 0x0F, 0x00, 0x00), 6, mem_patches=[(0x0F, b'\x12')], x=0x0F, expected_mem_patches=[(0x0F, b'\x13')])
+        self._test_play(b'\xEE\x00\x02', (0x8003, 0x00, 0x00, 0x00, 0x00, 0x00), 6, mem_patches=[(0x0200, b'\x12')], expected_mem_patches=[(0x0200, b'\x13')])
+        self._test_play(b'\xFE\x00\x02', (0x8003, 0x00, 0x00, 0x0F, 0x00, 0x00), 7, mem_patches=[(0x020F, b'\x12')], x=0x0F, expected_mem_patches=[(0x020F, b'\x13')])
+
+    def test_jmp(self):
+        self._test_play(b'\x4C\x00\x02', (0x0200, 0x00, 0x00, 0x00, 0x00, 0x00), 3)
+        self._test_play(b'\x6C\x00\x02', (0xC000, 0x00, 0x00, 0x00, 0x00, 0x00), 5, mem_patches=[(0x0200, b'\x00\xC0')])
+
+    def test_jsr(self):
+        self._test_play(b'\x20\x00\x02', (0x0200, 0xFD, 0x00, 0x00, 0x00, 0x00), 6, s=0xFF, expected_mem_patches=[(0x01FE, b'\x80\x02')])
+        self._test_play(b'\x20\x00\x02', (0x0200, 0x00, 0x00, 0x00, 0x00, 0x00), 6, s=0x02, expected_mem_patches=[(0x0101, b'\x80\x02')])
+        self._test_play(b'\x20\x00\x02', (0x0200, 0xFE, 0x00, 0x00, 0x00, 0x00), 6, s=0x00, expected_mem_patches=[(0x0100, b'\x02'), (0x01FF, b'\x80')]) # stack wrap-around mid address
+        self._test_play(b'\x20\x00\x02', (0x0200, 0xFF, 0x00, 0x00, 0x00, 0x00), 6, s=0x01, expected_mem_patches=[(0x0100, b'\x80\x02')]) # stack wrap-around after address

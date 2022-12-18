@@ -17,7 +17,7 @@ import array
 ZERO_PAGE_OFFSET         = 0x0000
 STACK_OFFSET             = 0x0100
 STACK_SIZE               = 0x0100
-TOP_OF_STACK_OFFSET      = 0x0200
+TOP_OF_STACK_OFFSET      = 0x01FF
 RAM_OFFSET               = 0x0200
 RAM_SIZE                 = 0x0800
 RAM_MIRRORS_OFFSET       = 0x0800
@@ -116,22 +116,13 @@ def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
 def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
-    pc, sp, a, x, y, p = registers
+    pc, s, a, x, y, p = registers
 
-    # NOTE: consider flag names reserved: c, z, i, d, b, v, n
+    # NOTE: consider flag letter names reserved: c, z, i, d, b, v, n
 
     mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
     # Resolve address per mode
-    def _resolve_indirect_addr(mem, pc):
-        i = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
-        return mapper.resolve(mem[i]|(mem[i+1]<<8))
-    def _resolve_relative_addr(mem, pc):
-        nonlocal t
-        rel_addr = signed8(mem[pc+1])
-        pc += 2
-        t += (((pc&0xFF)+rel_addr)>>8) & 1
-        return pc + rel_addr
     def _resolve_immediate(mem, pc):
         return pc + 1
     def _resolve_zero_page(mem, pc):
@@ -161,6 +152,19 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr = mem[i] + y
         t += addr>>8
         return mapper.resolve((addr+(mem[i+1]<<8))%0x10000)
+
+    # Resolve 16-bit addresses (for assigning to pc) in various modes
+    def _resolve_absolute16(mem, pc):
+        return ((mem[pc+1] | (mem[pc+2]<<8)))
+    def _resolve_indirect16(mem, pc):
+        addr = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
+        return mem[addr] | (mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8)
+    def _resolve_relative16(mem, pc):
+        nonlocal t
+        rel_addr = signed8(mem[pc+1])
+        pc += 2
+        t += (((pc&0xFF)+rel_addr)>>8) & 1
+        return pc + rel_addr
 
     def _build_undefined_op(opcode):
         def undefined_op(pc):
@@ -357,13 +361,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
     # BMI (Branch on MInus)
     def _30_bmi(pc):
         nonlocal t
         if p & N:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -375,13 +379,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
     # BVS (Branch on oVerflow Set)
     def _70_bvs(pc):
         nonlocal t
         if p & V:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -393,13 +397,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
     # BCS (Branch on Carry Set)
     def _b0_bcs(pc):
         nonlocal t
         if p & C:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -411,13 +415,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
     # BEQ (Branch on EQual)
     def _f0_beq(pc):
         nonlocal t
         if p & Z:
             t += 3
-            return _resolve_relative_addr(mem, pc)
+            return _resolve_relative16(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -665,7 +669,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
+        r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 5
@@ -674,7 +678,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
+        r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 6
@@ -683,7 +687,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
+        r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 6
@@ -692,7 +696,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
+        r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 7
@@ -702,31 +706,25 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: none
     def _4c_jmp_absolute(pc):
         nonlocal t
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
         t += 3
-        return pc + 3
+        return _resolve_absolute16(mem, pc)
     def _6c_jmp_indirect(pc):
         nonlocal t
-        addr32 = _resolve_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
         t += 5
-        return pc + 3
+        return _resolve_indirect16(mem, pc)
     
     # JSR (Jump to SubRoutine)
     # Writes flags: none
     def _20_jsr_absolute(pc):
-        nonlocal t
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        nonlocal t, s
+        to = _resolve_absolute16(mem, pc)
+        pc += 2 # 3 - 1 (offset by one before storing on stack)
+        mem[STACK_OFFSET+s] = pc & 0xFF
+        s = (s-1) & 0xFF
+        mem[STACK_OFFSET+s] = pc >> 8
+        s = (s-1) & 0xFF
         t += 6
-        return pc + 3
+        return to
     
     # LDA (LoaD Accumulator)
     # Writes flags: N Z
@@ -784,31 +782,31 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _a2_ldx_immediate(pc):
         nonlocal t, x, p
         x = mem[_resolve_immediate(mem, pc)]
-        p = (0x00 if x else Z) | (x & N)
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 2
         return pc + 2
     def _a6_ldx_zero_page(pc):
         nonlocal t, x, p
         x = mem[_resolve_zero_page(mem, pc)]
-        p = (0x00 if x else Z) | (x & N)
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 3
         return pc + 2
     def _b6_ldx_zero_page_indexed_y(pc):
         nonlocal t, x, p
         x = mem[_resolve_zero_page_indexed_y(mem, pc)]
-        p = (0x00 if x else Z) | (x & N)
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 2
     def _ae_ldx_absolute(pc):
         nonlocal t, x, p
         x = mem[_resolve_absolute(mem, pc)]
-        p = (0x00 if x else Z) | (x & N)
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
     def _be_ldx_absolute_indexed_y(pc):
         nonlocal t, x, p
         x = mem[_resolve_absolute_indexed_y(mem, pc)]
-        p = (0x00 if x else Z) | (x & N)
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
     
@@ -817,31 +815,31 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _a0_ldy_immediate(pc):
         nonlocal t, y, p
         y = mem[_resolve_immediate(mem, pc)]
-        p = (0x00 if y else Z) | (y & N)
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 2
         return pc + 2
     def _a4_ldy_zero_page(pc):
         nonlocal t, y, p
         y = mem[_resolve_zero_page(mem, pc)]
-        p = (0x00 if y else Z) | (y & N)
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 3
         return pc + 2
     def _b4_ldy_zero_page_indexed_x(pc):
         nonlocal t, y, p
         y = mem[_resolve_zero_page_indexed_x(mem, pc)]
-        p = (0x00 if y else Z) | (y & N)
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 2
     def _ac_ldy_absolute(pc):
         nonlocal t, y, p
         y = mem[_resolve_absolute(mem, pc)]
-        p = (0x00 if y else Z) | (y & N)
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
     def _bc_ldy_absolute_indexed_x(pc):
         nonlocal t, y, p
         y = mem[_resolve_absolute_indexed_x(mem, pc)]
-        p = (0x00 if y else Z) | (y & N)
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
     
@@ -850,7 +848,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _4a_lsr_accumulator(pc):
         nonlocal t, a, p
         r = a >> 1
-        p = (a & C) | (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
         a = r
         t += 2
         return pc + 1
@@ -859,7 +857,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r)
         t += 5
         return pc + 2
@@ -868,7 +866,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r)
         t += 6
         return pc + 2
@@ -877,7 +875,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r)
         t += 6
         return pc + 3
@@ -886,7 +884,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m >> 1
-        p = (m & C) | (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r)
         t += 7
         return pc + 3
@@ -1273,7 +1271,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # These instructions are implied mode, have a length of one byte and require machine cycles as indicated. The "PuLl" operations are known as "POP" on most other microprocessors. With the 6502, the stack is always on page one ($100-$1FF) and works top down.
     # TXS (Transfer X to Stack ptr)
     def _9a_txs(pc):
-        nonlocal t, sp
+        nonlocal t, s
     
         return pc + None
     # TSX (Transfer Stack ptr to X)
@@ -1283,7 +1281,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return pc + None
     # PHA (PusH Accumulator)
     def _48_pha(pc):
-        nonlocal t, sp
+        nonlocal t, s
     
         return pc + None
     # PLA (PuLl Accumulator)
@@ -1293,7 +1291,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return pc + None
     # PHP (PusH Processor status)
     def _08_php(pc):
-        nonlocal t, sp
+        nonlocal t, s
     
         return pc + None
     # PLP (PuLl Processor status)
@@ -1514,7 +1512,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     except VMStop:
         pass  # clean exit
 
-    return (pc, sp, a, x, y, p), t
+    return (pc, s, a, x, y, p), t
 
 class Cart(object):
     def __init__(
