@@ -564,73 +564,50 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z
     def _49_eor_immediate(pc):
         nonlocal t, a, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_immediate(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _45_eor_zero_page(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_zero_page(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _55_eor_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _4d_eor_absolute(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_absolute(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _5d_eor_absolute_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_absolute_indexed_x(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _59_eor_absolute_indexed_y(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_absolute_indexed_y(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _41_eor_indexed_indirect(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_indexed_indirect(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _51_eor_indirect_indexed(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a ^= mem[_resolve_indirect_indexed(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
@@ -696,7 +673,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -705,7 +682,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -714,7 +691,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -723,7 +700,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
@@ -934,7 +911,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         m = mem[_resolve_immediate(mem, pc)]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 2
         return pc + 2
@@ -943,7 +920,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 3
         return pc + 2
@@ -952,7 +929,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 2
@@ -961,7 +938,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -970,7 +947,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -979,7 +956,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 4
         return pc + 3
@@ -988,7 +965,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -997,7 +974,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = m  # do something here
-        p = (0x00 if (r&0xFF) else Z) | (r&N)
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
