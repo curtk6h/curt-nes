@@ -1699,7 +1699,7 @@ class NES(object):
         # Append PRG-ROM then CHR-ROM to memory starting at 0x8000
         for bank_i, bank in enumerate(cart.prg_rom_banks):
             for i in range(0x4000):
-                self.mem[ROM_LOW_OFFSET+bank_i*0x4000] = bank[i]
+                self.mem[ROM_LOWER_BANK_OFFSET+bank_i*0x4000] = bank[i]
 
     def play_cart(self):
         self.registers, self.t = \
