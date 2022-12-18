@@ -483,28 +483,20 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z C
     def _e0_cpx_immediate(pc):
         nonlocal t, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = x - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _e4_cpx_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = x - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _ec_cpx_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = x - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     
@@ -512,28 +504,20 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z C
     def _c0_cpy_immediate(pc):
         nonlocal t, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = y - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c4_cpy_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = y - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _cc_cpy_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = y - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     
