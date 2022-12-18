@@ -205,7 +205,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _79_adc_absolute_indexed_y(pc):
         nonlocal t, a, p
@@ -213,7 +213,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _61_adc_indexed_indirect(pc):
         nonlocal t, a, p
@@ -229,7 +229,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # AND (bitwise AND with accumulator)
@@ -262,13 +262,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         a &= mem[_resolve_absolute_indexed_x(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _39_and_absolute_indexed_y(pc):
         nonlocal t, a, p
         a &= mem[_resolve_absolute_indexed_y(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _21_and_indexed_indirect(pc):
         nonlocal t, a, p
@@ -280,7 +280,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         a &= mem[_resolve_indirect_indexed(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # ASL (Arithmetic Shift Left)
@@ -352,13 +352,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             t += 2
             return pc + 2
         else:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
     # BMI (Branch on MInus)
     def _30_bmi(pc):
         nonlocal t
         if p & N:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
         else:
             t += 2
@@ -370,13 +370,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             t += 2
             return pc + 2
         else:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
     # BVS (Branch on oVerflow Set)
     def _70_bvs(pc):
         nonlocal t
         if p & V:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
         else:
             t += 2
@@ -388,13 +388,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             t += 2
             return pc + 2
         else:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
     # BCS (Branch on Carry Set)
     def _b0_bcs(pc):
         nonlocal t
         if p & C:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
         else:
             t += 2
@@ -406,13 +406,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
             t += 2
             return pc + 2
         else:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
     # BEQ (Branch on EQual)
     def _f0_beq(pc):
         nonlocal t
         if p & Z:
-            t += 3  # +1 if page crossed
+            t += 3
             return _resolve_relative_addr(mem, pc)
         else:
             t += 2
@@ -458,13 +458,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         r = a - mem[_resolve_absolute_indexed_x(mem, pc)] - (~p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _d9_cmp_absolute_indexed_y(pc):
         nonlocal t, p
         r = a - mem[_resolve_absolute_indexed_y(mem, pc)] - (~p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _c1_cmp_indexed_indirect(pc):
         nonlocal t, p
@@ -476,7 +476,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         r = a - mem[_resolve_indirect_indexed(mem, pc)] - (~p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # CPX (ComPare X register)
@@ -620,7 +620,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _59_eor_absolute_indexed_y(pc):
         nonlocal t, a, p
@@ -629,7 +629,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _41_eor_indexed_indirect(pc):
         nonlocal t, a, p
@@ -647,7 +647,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # Flag (Processor Status) Instructions
@@ -804,13 +804,13 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         a = mem[_resolve_absolute_indexed_x(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _b9_lda_absolute_indexed_y(pc):
         nonlocal t, a, p
         a = mem[_resolve_absolute_indexed_y(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _a1_lda_indexed_indirect(pc):
         nonlocal t, a, p
@@ -822,7 +822,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, a, p
         a = mem[_resolve_indirect_indexed(mem, pc)]
         p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # LDX (LoaD X register)
@@ -855,7 +855,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, x, p
         x = mem[_resolve_absolute_indexed_y(mem, pc)]
         p = (0x00 if x else Z) | (x & N)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     
     # LDY (LoaD Y register)
@@ -888,7 +888,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, y, p
         y = mem[_resolve_absolute_indexed_x(mem, pc)]
         p = (0x00 if y else Z) | (y & N)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     
     # LSR (Logical Shift Right)
@@ -988,7 +988,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _19_ora_absolute_indexed_y(pc):
         nonlocal t, a, p
@@ -997,7 +997,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _01_ora_indexed_indirect(pc):
         nonlocal t, a, p
@@ -1015,7 +1015,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = m  # do something here
         p = (0x00 if (r&0xFF) else Z) | (r&N)
         mapper.write(addr32, r&0xFF)
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # Register Instructions
@@ -1225,7 +1225,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _f9_sbc_absolute_indexed_y(pc):
         nonlocal t, p, a
@@ -1234,7 +1234,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
-        t += 4 # + add 1 cycle if page boundary crossed
+        t += 4
         return pc + 3
     def _e1_sbc_indexed_indirect(pc):
         nonlocal t, p, a
@@ -1252,7 +1252,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
-        t += 5 # + add 1 cycle if page boundary crossed
+        t += 5
         return pc + 2
     
     # STA (STore Accumulator)
