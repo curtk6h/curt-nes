@@ -42,15 +42,19 @@ RESET_OFFSET             = 0xFFFC
 IRQ_OFFSET               = 0xFFFE
 
 # Processor statuses
-C = 1 << 0  # carry
-Z = 1 << 1  # zero
-I = 1 << 2  # interrupt disable
-D = 1 << 3  # decimal mode
-B = 1 << 4  # break command
-_ = 1 << 5  # unused
-V = 1 << 6  # overflow
 N = 1 << 7  # negative
+V = 1 << 6  # overflow
+_ = 1 << 5  # unused
+B = 1 << 4  # break command
+D = 1 << 3  # decimal mode
+I = 1 << 2  # interrupt disable
+Z = 1 << 1  # zero
+C = 1 << 0  # carry
 
+MASK_V    = ~(V)
+MASK_D    = ~(D)
+MASK_I    = ~(I)
+MASK_C    = ~(C)
 MASK_NZ   = ~(N|Z)
 MASK_NVZ  = ~(N|V|Z)
 MASK_NVZC = ~(N|V|Z|C)
@@ -612,59 +616,48 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return pc + 2
     
     # Flag (Processor Status) Instructions
-    # Writes flags: as noted
-    # These instructions are implied mode, have a length of one byte and require two machine cycles.
-    # 
-    # Notes:
-    #   The Interrupt flag is used to prevent (SEI) or enable (CLI) maskable interrupts (aka IRQ's). It does not signal the presence or absence of an interrupt condition. The 6502 will set this flag automatically in response to an interrupt and restore it to its prior status on completion of the interrupt service routine. If you want your interrupt service routine to permit other maskable interrupts, you must clear the I flag in your code.
-    # 
-    # The Decimal flag controls how the 6502 adds and subtracts. If set, arithmetic is carried out in packed binary coded decimal. This flag is unchanged by interrupts and is unknown on power-up. The implication is that a CLD should be included in boot or interrupt coding.
-    # 
-    # The Overflow flag is generally misunderstood and therefore under-utilised. After an ADC or SBC instruction, the overflow flag will be set if the twos complement result is less than -128 or greater than +127, and it will cleared otherwise. In twos complement, $80 through $FF represents -128 through -1, and $00 through $7F represents 0 through +127. Thus, after:
-    # 
-    # CLC
-    #   LDA #$7F ;   +127
-    #   ADC #$01 ; +   +1
-    # the overflow flag is 1 (+127 + +1 = +128), and after:
-    #   CLC
-    #   LDA #$81 ;   -127
-    #   ADC #$FF ; +   -1
-    # the overflow flag is 0 (-127 + -1 = -128). The overflow flag is not affected by increments, decrements, shifts and logical operations i.e. only ADC, BIT, CLV, PLP, RTI and SBC affect it. There is no op code to set the overflow but a BIT test on an RTS instruction will do the trick.
     # CLC (CLear Carry)
     def _18_clc(pc):
         nonlocal t, p
-    
-        return pc + None
+        p &= MASK_C
+        t += 2
+        return pc + 1
     # SEC (SEt Carry)
     def _38_sec(pc):
         nonlocal t, p
-    
-        return pc + None
+        p |= C
+        t += 2
+        return pc + 1
     # CLI (CLear Interrupt)
     def _58_cli(pc):
         nonlocal t, p
-    
-        return pc + None
+        p &= MASK_I
+        t += 2
+        return pc + 1
     # SEI (SEt Interrupt)
     def _78_sei(pc):
         nonlocal t, p
-    
-        return pc + None
+        p |= I
+        t += 2
+        return pc + 1
     # CLV (CLear oVerflow)
     def _b8_clv(pc):
         nonlocal t, p
-    
-        return pc + None
+        p &= MASK_V
+        t += 2
+        return pc + 1
     # CLD (CLear Decimal)
     def _d8_cld(pc):
         nonlocal t, p
-    
-        return pc + None
+        p &= MASK_D
+        t += 2
+        return pc + 1
     # SED (SEt Decimal)
     def _f8_sed(pc):
         nonlocal t, p
-    
-        return pc + None
+        p |= D
+        t += 2
+        return pc + 1
     
     # INC (INCrement memory)
     # Writes flags: N Z
