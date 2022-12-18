@@ -123,7 +123,11 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         i = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
         return mapper.resolve(mem[i]|(mem[i+1]<<8))
     def _resolve_relative_addr(mem, pc):
-        return pc + 2 + signed8(mem[pc+1])
+        nonlocal t
+        rel_addr = signed8(mem[pc+1])
+        pc += 2
+        t += (((pc&0xFF)+rel_addr)>>7) & 2
+        return pc + rel_addr
     def _resolve_immediate(mem, pc):
         return pc + 1
     def _resolve_zero_page(mem, pc):
@@ -135,19 +139,24 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _resolve_absolute(mem, pc):
         return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))))
     def _resolve_absolute_indexed_x(mem, pc):
-        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+x)%0x10000)
+        nonlocal t
+        addr = mem[pc+1] + x
+        t += addr>>8
+        return mapper.resolve((addr+(mem[pc+2]<<8))%0x10000)
     def _resolve_absolute_indexed_y(mem, pc):
-        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+y)%0x10000)
+        nonlocal t
+        addr = mem[pc+1] + y
+        t += addr>>8
+        return mapper.resolve((addr+(mem[pc+2]<<8))%0x10000)
     def _resolve_indexed_indirect(mem, pc):
         i = (mem[pc+1]+x) % 0x100
         return mapper.resolve(mem[i]|(mem[i+1]<<8))
     def _resolve_indirect_indexed(mem, pc):
+        nonlocal t
         i = (mem[pc+1])
-        # TODO: +1 for page crossings
-        # addr = mem[i]+y
-        # t += addr>>8
-        # (addr+(mem[i+1]<<8))
-        return mapper.resolve(((mem[i]|(mem[i+1]<<8))+y)%0x10000)
+        addr = mem[i] + y
+        t += addr>>8
+        return mapper.resolve((addr+(mem[i+1]<<8))%0x10000)
 
     def _build_undefined_op(opcode):
         def undefined_op(pc):
@@ -439,73 +448,50 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Compare sets flags as if a subtraction had been carried out. If the value in the accumulator is equal or greater than the compared value, the Carry will be set. The equal (Z) and negative (N) flags will be set based on equality or lack thereof and the sign (i.e. A>=$80) of the accumulator.
     def _c9_cmp_immediate(pc):
         nonlocal t, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c5_cmp_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _d5_cmp_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_zero_page_indexed_x(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 2
     def _cd_cmp_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _dd_cmp_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_absolute_indexed_x(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _d9_cmp_absolute_indexed_y(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_absolute_indexed_y(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4 # + add 1 cycle if page boundary crossed
         return pc + 3
     def _c1_cmp_indexed_indirect(pc):
         nonlocal t, p
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_indexed_indirect(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 6
         return pc + 2
     def _d1_cmp_indirect_indexed(pc):
         nonlocal t, p
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = a - mem[_resolve_indirect_indexed(mem, pc)] - (~p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 5 # + add 1 cycle if page boundary crossed
         return pc + 2
     
