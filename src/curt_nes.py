@@ -245,49 +245,49 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _29_and_immediate(pc):
         nonlocal t, a, p
         a &= mem[_resolve_immediate(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _25_and_zero_page(pc):
         nonlocal t, a, p
         a &= mem[_resolve_zero_page(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _35_and_zero_page_indexed_x(pc):
         nonlocal t, a, p
         a &= mem[_resolve_zero_page_indexed_x(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _2d_and_absolute(pc):
         nonlocal t, a, p
         a &= mem[_resolve_absolute(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _3d_and_absolute_indexed_x(pc):
         nonlocal t, a, p
         a &= mem[_resolve_absolute_indexed_x(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _39_and_absolute_indexed_y(pc):
         nonlocal t, a, p
         a &= mem[_resolve_absolute_indexed_y(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _21_and_indexed_indirect(pc):
         nonlocal t, a, p
         a &= mem[_resolve_indexed_indirect(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _31_and_indirect_indexed(pc):
         nonlocal t, a, p
         a &= mem[_resolve_indirect_indexed(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
@@ -731,49 +731,49 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _a9_lda_immediate(pc):
         nonlocal t, a, p
         a = mem[_resolve_immediate(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _a5_lda_zero_page(pc):
         nonlocal t, a, p
         a = mem[_resolve_zero_page(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _b5_lda_zero_page_indexed_x(pc):
         nonlocal t, a, p
         a = mem[_resolve_zero_page_indexed_x(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _ad_lda_absolute(pc):
         nonlocal t, a, p
         a = mem[_resolve_absolute(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _bd_lda_absolute_indexed_x(pc):
         nonlocal t, a, p
         a = mem[_resolve_absolute_indexed_x(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _b9_lda_absolute_indexed_y(pc):
         nonlocal t, a, p
         a = mem[_resolve_absolute_indexed_y(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _a1_lda_indexed_indirect(pc):
         nonlocal t, a, p
         a = mem[_resolve_indexed_indirect(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _b1_lda_indirect_indexed(pc):
         nonlocal t, a, p
         a = mem[_resolve_indirect_indexed(mem, pc)]
-        p = (p&MASK_NZ) | (a & N) | (0x00 if a else Z)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
@@ -900,119 +900,111 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z
     def _09_ora_immediate(pc):
         nonlocal t, a, p
-        m = mem[_resolve_immediate(mem, pc)]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_immediate(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _05_ora_zero_page(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_zero_page(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _15_ora_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _0d_ora_absolute(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_absolute(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _1d_ora_absolute_indexed_x(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_absolute_indexed_x(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _19_ora_absolute_indexed_y(pc):
         nonlocal t, a, p
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_absolute_indexed_y(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _01_ora_indexed_indirect(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_indexed_indirect(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _11_ora_indirect_indexed(pc):
         nonlocal t, a, p
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        a |= mem[_resolve_indirect_indexed(mem, pc)]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
     # Register Instructions
     # Writes flags: N Z
-    # These instructions are implied mode, have a length of one byte and require two machine cycles.
     # TAX (Transfer A to X)
     def _aa_tax(pc):
         nonlocal t, x, p
-    
-        return pc + None
+        x = a
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        t += 2
+        return pc + 1
     # TXA (Transfer X to A)
     def _8a_txa(pc):
         nonlocal t, a, p
-    
-        return pc + None
+        a = x
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+        t += 2
+        return pc + 1
     # DEX (DEcrement X)
     def _ca_dex(pc):
         nonlocal t, x, p
-    
-        return pc + None
+        x = (x - 1) & 0xFF
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        t += 2
+        return pc + 1
     # INX (INcrement X)
     def _e8_inx(pc):
         nonlocal t, x, p
-    
-        return pc + None
+        x = (x + 1) & 0xFF
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        t += 2
+        return pc + 1
     # TAY (Transfer A to Y)
     def _a8_tay(pc):
         nonlocal t, y, p
-    
-        return pc + None
+        y = a
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        t += 2
+        return pc + 1
     # TYA (Transfer Y to A)
     def _98_tya(pc):
         nonlocal t, a, p
-    
-        return pc + None
+        a = y
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+        t += 2
+        return pc + 1
     # DEY (DEcrement Y)
     def _88_dey(pc):
         nonlocal t, y, p
-    
-        return pc + None
+        y = (y - 1) & 0xFF
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        t += 2
+        return pc + 1
     # INY (INcrement Y)
     def _c8_iny(pc):
         nonlocal t, y, p
-    
-        return pc + None
+        y = (y + 1) & 0xFF
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        t += 2
+        return pc + 1
     
     # ROL (ROtate Left)
     # Writes flags: N Z C
