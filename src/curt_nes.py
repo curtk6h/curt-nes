@@ -1010,18 +1010,15 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z C
     def _2a_rol_accumulator(pc):
         nonlocal t, a, p
-        addr32 = _resolve_accumulator(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
+        r = (a<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        a = r & 0xFF
         t += 2
         return pc + 1
     def _26_rol_zero_page(pc):
         nonlocal t, p
         addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
+        r = (mem[addr32]<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         mapper.write(addr32, r&0xFF)
         t += 5
@@ -1029,8 +1026,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _36_rol_zero_page_indexed_x(pc):
         nonlocal t, p
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
+        r = (mem[addr32]<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         mapper.write(addr32, r&0xFF)
         t += 6
@@ -1038,8 +1034,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _2e_rol_absolute(pc):
         nonlocal t, p
         addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
+        r = (mem[addr32]<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         mapper.write(addr32, r&0xFF)
         t += 6
@@ -1047,8 +1042,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     def _3e_rol_absolute_indexed_x(pc):
         nonlocal t, p
         addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
+        r = (mem[addr32]<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         mapper.write(addr32, r&0xFF)
         t += 7
@@ -1058,19 +1052,17 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: N Z C
     def _6a_ror_accumulator(pc):
         nonlocal t, a, p
-        addr32 = _resolve_accumulator(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        r = (a>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
+        a = r & 0xFF
         t += 2
         return pc + 1
     def _66_ror_zero_page(pc):
         nonlocal t, p
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        r = (m>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r&0xFF)
         t += 5
         return pc + 2
@@ -1078,8 +1070,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        r = (m>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 2
@@ -1087,8 +1079,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        r = (m>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r&0xFF)
         t += 6
         return pc + 3
@@ -1096,8 +1088,8 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, p
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        r = (m>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         mapper.write(addr32, r&0xFF)
         t += 7
         return pc + 3
