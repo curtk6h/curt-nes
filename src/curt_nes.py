@@ -719,9 +719,9 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         nonlocal t, s
         to = _resolve_absolute16(mem, pc)
         pc += 2 # 3 - 1 (offset by one before storing on stack)
-        mem[STACK_OFFSET+s] = pc & 0xFF
-        s = (s-1) & 0xFF
         mem[STACK_OFFSET+s] = pc >> 8
+        s = (s-1) & 0xFF
+        mem[STACK_OFFSET+s] = pc & 0xFF
         s = (s-1) & 0xFF
         t += 6
         return to
@@ -1097,23 +1097,24 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # RTI (ReTurn from Interrupt)
     # Writes flags: all
     def _40_rti_implied(pc):
-        nonlocal t, p
-        addr32 = _resolve_implied(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        nonlocal t, p, s
+        s = (s+1) & 0xFF
+        p = mem[STACK_OFFSET+s]
+        s = (s+1) & 0xFF
+        pc = mem[STACK_OFFSET+s]
+        s = (s+1) & 0xFF
+        pc |= mem[STACK_OFFSET+s] << 8
         t += 6
-        return pc + 1
+        return pc
     
     # RTS (ReTurn from Subroutine)
     # Writes flags: none
     def _60_rts_implied(pc):
-        nonlocal t
-        addr32 = _resolve_implied(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        nonlocal t, s
+        s = (s+1) & 0xFF
+        pc = mem[STACK_OFFSET+s]
+        s = (s+1) & 0xFF
+        pc |= mem[STACK_OFFSET+s] << 8
         t += 6
         return pc + 1
     
@@ -1195,119 +1196,97 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: none
     def _85_sta_zero_page(pc):
         nonlocal t
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page(mem, pc), a)
         t += 3
         return pc + 2
     def _95_sta_zero_page_indexed_x(pc):
         nonlocal t
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page_indexed_x(mem, pc), a)
         t += 4
         return pc + 2
     def _8d_sta_absolute(pc):
         nonlocal t
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_absolute(mem, pc), a)
         t += 4
         return pc + 3
     def _9d_sta_absolute_indexed_x(pc):
         nonlocal t
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_absolute_indexed_x(mem, pc), a)
         t += 5
         return pc + 3
     def _99_sta_absolute_indexed_y(pc):
         nonlocal t
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_absolute_indexed_y(mem, pc), a)
         t += 5
         return pc + 3
     def _81_sta_indexed_indirect(pc):
         nonlocal t
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_indexed_indirect(mem, pc), a)
         t += 6
         return pc + 2
     def _91_sta_indirect_indexed(pc):
         nonlocal t
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_indirect_indexed(mem, pc), a)
         t += 6
         return pc + 2
     
     # Stack Instructions
-    # 
-    # These instructions are implied mode, have a length of one byte and require machine cycles as indicated. The "PuLl" operations are known as "POP" on most other microprocessors. With the 6502, the stack is always on page one ($100-$1FF) and works top down.
     # TXS (Transfer X to Stack ptr)
     def _9a_txs(pc):
         nonlocal t, s
-    
-        return pc + None
+        s = x
+        t += 2
+        return pc + 1
     # TSX (Transfer Stack ptr to X)
     def _ba_tsx(pc):
         nonlocal t, x
-    
-        return pc + None
+        x = s
+        t += 2
+        return pc + 1
     # PHA (PusH Accumulator)
     def _48_pha(pc):
         nonlocal t, s
-    
-        return pc + None
+        mem[STACK_OFFSET+s] = a
+        s = (s-1) & 0xFF
+        t += 3
+        return pc + 1
     # PLA (PuLl Accumulator)
     def _68_pla(pc):
         nonlocal t, a
-    
-        return pc + None
+        s = (s+1) & 0xFF
+        a = mem[STACK_OFFSET+s]
+        t += 4
+        return pc + 1
     # PHP (PusH Processor status)
     def _08_php(pc):
         nonlocal t, s
-    
-        return pc + None
+        mem[STACK_OFFSET+s] = p
+        s = (s-1) & 0xFF
+        t += 3
+        return pc + 1
     # PLP (PuLl Processor status)
     def _28_plp(pc):
         nonlocal t, p
-    
-        return pc + None
+        s = (s+1) & 0xFF
+        p = mem[STACK_OFFSET+s]
+        t += 4
+        return pc + 1
     
     # STX (STore X register)
     # Writes flags: none
     def _86_stx_zero_page(pc):
         nonlocal t
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page(mem, pc), x)
         t += 3
         return pc + 2
     def _96_stx_zero_page_indexed_y(pc):
         nonlocal t
-        addr32 = _resolve_zero_page_indexed_y(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page_indexed_y(mem, pc), x)
         t += 4
         return pc + 2
     def _8e_stx_absolute(pc):
         nonlocal t
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_absolute(mem, pc), x)
         t += 4
         return pc + 3
     
@@ -1315,26 +1294,17 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # Writes flags: none
     def _84_sty_zero_page(pc):
         nonlocal t
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page(mem, pc), y)
         t += 3
         return pc + 2
     def _94_sty_zero_page_indexed_x(pc):
         nonlocal t
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_zero_page_indexed_x(mem, pc), y)
         t += 4
         return pc + 2
     def _8c_sty_absolute(pc):
         nonlocal t
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
-        r = m  # do something here
-        mapper.write(addr32, r&0xFF)
+        mapper.write(_resolve_absolute(mem, pc), y)
         t += 4
         return pc + 3
     
