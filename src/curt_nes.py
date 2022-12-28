@@ -41,6 +41,28 @@ NMI_OFFSET               = 0xFFFA
 RESET_OFFSET             = 0xFFFC
 IRQ_OFFSET               = 0xFFFE
 
+# PPU numbers
+NTSC_FPS = 60
+NTSC_MS_PER_FRAME = 16.67
+NTSC_SCANLINES_PER_FRAME = 262
+NTSC_VLBANK_SCANLINES_PER_FRAME = 20
+NTSC_CPU_CYCLES_PER_SCANLINE = 113.33
+NTSC_SCREEN_WIDTH = 256
+NTSC_SCREEN_HEIGHT = 224  # top and bottom 8 scanlines are cut off
+PAL_FPS = 50
+PAL_MS_PER_FRAME = 20
+PAL_SCANLINES_PER_FRAME = 312
+PAL_VLBANK_SCANLINES_PER_FRAME = 70
+PAL_CPU_CYCLES_PER_SCANLINE = 106.56
+PAL_SCREEN_WIDTH = 256
+PAL_SCREEN_HEIGHT = 240
+
+# Interrupt types (internal to this emulator)
+NO_INTERRUPT = 0
+NMI = 1
+RESET = 2
+IRQ = 3
+
 # Processor statuses
 N = 1 << 7  # negative
 V = 1 << 6  # overflow
@@ -115,7 +137,10 @@ mappers = {
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
-def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
+def do_nothing(_):
+    return 0xFFFF  # arbitrarily large number of cycles
+
+def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=do_nothing, stop_on_brk=False):
     pc, s, a, x, y, p = registers
 
     # NOTE: consider flag letter names reserved: c, z, i, d, b, v, n
@@ -123,6 +148,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
     # Resolve address per mode
+
     def _resolve_immediate(mem, pc):
         return pc + 1
     def _resolve_zero_page(mem, pc):
@@ -154,6 +180,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return mapper.resolve((addr+(mem[i+1]<<8))%0x10000)
 
     # Resolve 16-bit addresses (for assigning to pc) in various modes
+
     def _resolve_absolute16(mem, pc):
         return ((mem[pc+1] | (mem[pc+2]<<8)))
     def _resolve_indirect16(mem, pc):
@@ -165,6 +192,37 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         pc += 2
         t += (((pc&0xFF)+rel_addr)>>8) & 1
         return pc + rel_addr
+
+    # Interrupts
+
+    def _trigger_interrupt(new_pc):
+        # note that this is the only place pc is used outside of the main loop,
+        # as interrupts are the only exception to normal execution
+        nonlocal pc
+        nonlocal t, s
+        mem[STACK_OFFSET+s] = new_pc << 8
+        s = (s-1) & 0xFF
+        mem[STACK_OFFSET+s] = new_pc & 0xFF
+        s = (s-1) & 0xFF
+        mem[STACK_OFFSET+s] = p
+        s = (s-1) & 0xFF
+        t += 7
+        pc = new_pc
+
+    def _nmi():
+        _trigger_interrupt(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8))
+
+    def _reset():
+        _trigger_interrupt(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8))
+
+    def _irq():
+        if p&I:
+            return pc  # interrupt disabled
+        _trigger_interrupt(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8))
+
+    # Instructions
+
+    interrupts = (_nmi, _reset, _irq)
 
     def _build_undefined_op(opcode):
         def undefined_op(pc):
@@ -429,10 +487,10 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     # BRK (BReaK)
     # Writes flags: B
     def _00_brk_implied(pc):
-        # nonlocal t, p
-        # b = p & B
-        # t += 7
-        # return pc + 1
+        nonlocal p
+        _irq()
+        p |= B
+    def _00_brk_implied_stop_execution(pc):  # for unit testing / debugging
         raise VMStop()
     
     # CMP (CoMPare accumulator)
@@ -1252,9 +1310,10 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return pc + 1
     # PLA (PuLl Accumulator)
     def _68_pla(pc):
-        nonlocal t, a
+        nonlocal t, s, a, p
         s = (s+1) & 0xFF
         a = mem[STACK_OFFSET+s]
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 1
     # PHP (PusH Processor status)
@@ -1266,7 +1325,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
         return pc + 1
     # PLP (PuLl Processor status)
     def _28_plp(pc):
-        nonlocal t, p
+        nonlocal t, s, p
         s = (s+1) & 0xFF
         p = mem[STACK_OFFSET+s]
         t += 4
@@ -1339,7 +1398,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
     ops[0xb0] = _b0_bcs
     ops[0xd0] = _d0_bne
     ops[0xf0] = _f0_beq
-    ops[0x00] = _00_brk_implied
+    ops[0x00] = _00_brk_implied_stop_execution if stop_on_brk else _00_brk_implied
     ops[0xc9] = _c9_cmp_immediate
     ops[0xc5] = _c5_cmp_zero_page
     ops[0xd5] = _d5_cmp_zero_page_indexed_x
@@ -1462,7 +1521,9 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0):
 
     try:
         while True:
-            pc = ops[mem[pc]](pc)
+            next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
+            while t < next_t:  # catch up with external system(s)
+                pc = ops[mem[pc]](pc)
     except VMStop:
         pass  # clean exit
 

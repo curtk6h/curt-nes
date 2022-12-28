@@ -77,7 +77,7 @@ class TestOperations(unittest.TestCase):
 
         expected_mem = bytearray(mapper.mem)
 
-        registers, t = play(mapper, (pc, s, a, x, y, p))
+        registers, t = play(mapper, (pc, s, a, x, y, p), stop_on_brk=True)
 
         self.assertTupleEqual(registers, expected_registers)
 
@@ -491,22 +491,24 @@ class TestOperations(unittest.TestCase):
         self._test_play(b'\x91\x00', (0x8002, 0x00, 0xAA, 0x01, 0x0F, 0x00), 6, a=0xAA, mem_patches=[(0x0000, b'\x00\x00')], expected_mem_patches=[(0x000F, b'\xAA')], x=0x01, y=0x0F)
 
     def test_txs(self):
-        pass
+        self._test_play(b'\x9A', (0x8001, 0xAA, 0x00, 0xAA, 0x00, 0x00), 2, s=0x00, x=0xAA)
 
     def test_tsx(self):
-        pass
+        self._test_play(b'\xBA', (0x8001, 0xAA, 0x00, 0xAA, 0x00, 0x00), 2, s=0xAA, x=0x00)
 
     def test_pha(self):
-        pass
+        self._test_play(b'\x48', (0x8001, 0xFE, 0xAA, 0x00, 0x00, 0x00), 3, s=0xFF, a=0xAA, expected_mem_patches=[(0x01FF, b'\xAA')])
 
     def test_pla(self):
-        pass
+        self._test_play(b'\x68', (0x8001, 0xFF, 0x55, 0x00, 0x00, 0x00), 4, s=0xFE, a=0x00, mem_patches=[(0x01FF, b'\x55')])
+        self._test_play(b'\x68', (0x8001, 0xFF, 0x00, 0x00, 0x00, 0x02), 4, s=0xFE, a=0x00, mem_patches=[(0x01FF, b'\x00')]) # zero
+        self._test_play(b'\x68', (0x8001, 0xFF, 0xAA, 0x00, 0x00, 0x80), 4, s=0xFE, a=0x00, mem_patches=[(0x01FF, b'\xAA')]) # negative
 
     def test_php(self):
-        pass
+        self._test_play(b'\x08', (0x8001, 0xFE, 0x00, 0x00, 0x00, 0xAA), 3, s=0xFF, p=0xAA, expected_mem_patches=[(0x01FF, b'\xAA')])
 
     def test_plp(self):
-        pass
+        self._test_play(b'\x28', (0x8001, 0xFF, 0x00, 0x00, 0x00, 0xAA), 4, s=0xFE, p=0x00, mem_patches=[(0x01FF, b'\xAA')])
 
     def test_stx(self):
         pass
