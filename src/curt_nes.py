@@ -137,15 +137,16 @@ mappers = {
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
-def do_nothing(_):
-    return 0xFFFF  # arbitrarily large number of cycles
-
-def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=do_nothing, stop_on_brk=False):
+def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_on_brk=False):
     pc, s, a, x, y, p = registers
 
     # NOTE: consider flag letter names reserved: c, z, i, d, b, v, n
 
     mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
+
+    def _do_no_other_things(_):
+        return 0xFFFF  # arbitrarily large number of cycles
+    do_other_things = do_other_things or _do_no_other_things
 
     # Resolve address per mode
 
