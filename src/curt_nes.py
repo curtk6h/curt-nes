@@ -35,33 +35,26 @@ ROM_BANK_SIZE            = 0x4000
 ROM_UPPER_BANK_OFFSET    = 0xC000
 TOTAL_ADDRESS_SPACE      = 0x10000
 
-# Interrupt addresses
-INTERRUPT_OFFSET         = 0xFFFA
-NMI_OFFSET               = 0xFFFA
-RESET_OFFSET             = 0xFFFC
-IRQ_OFFSET               = 0xFFFE
-
-# PPU numbers
-NTSC_FPS = 60
-NTSC_MS_PER_FRAME = 16.67
-NTSC_SCANLINES_PER_FRAME = 262
-NTSC_VLBANK_SCANLINES_PER_FRAME = 20
-NTSC_CPU_CYCLES_PER_SCANLINE = 113.33
-NTSC_SCREEN_WIDTH = 256
-NTSC_SCREEN_HEIGHT = 224  # top and bottom 8 scanlines are cut off
-PAL_FPS = 50
-PAL_MS_PER_FRAME = 20
-PAL_SCANLINES_PER_FRAME = 312
-PAL_VLBANK_SCANLINES_PER_FRAME = 70
-PAL_CPU_CYCLES_PER_SCANLINE = 106.56
-PAL_SCREEN_WIDTH = 256
-PAL_SCREEN_HEIGHT = 240
+# # PPU numbers (for reference)
+# NTSC_FPS = 60
+# NTSC_MS_PER_FRAME = 16.67
+# NTSC_SCANLINES_PER_FRAME = 262
+# NTSC_VLBANK_SCANLINES_PER_FRAME = 20
+# NTSC_CPU_CYCLES_PER_SCANLINE = 113.33
+# NTSC_SCREEN_WIDTH = 256
+# NTSC_SCREEN_HEIGHT = 224  # top and bottom 8 scanlines are cut off
+# PAL_FPS = 50
+# PAL_MS_PER_FRAME = 20
+# PAL_SCANLINES_PER_FRAME = 312
+# PAL_VLBANK_SCANLINES_PER_FRAME = 70
+# PAL_CPU_CYCLES_PER_SCANLINE = 106.56
+# PAL_SCREEN_WIDTH = 256
+# PAL_SCREEN_HEIGHT = 240
 
 # Interrupt types (internal to this emulator)
-NO_INTERRUPT = 0
-NMI = 1
-RESET = 2
-IRQ = 3
+NMI = 0
+RESET = 1
+IRQ = 2
 
 # Processor statuses
 N = 1 << 7  # negative
@@ -1686,4 +1679,5 @@ if __name__ == "__main__":
         cart.print_config()
         exit(0)
 
-    #play(open(args.rom).read())
+    nes = NES(cart)
+    nes.play_cart()
