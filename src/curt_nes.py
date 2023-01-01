@@ -4,8 +4,13 @@
 # https://www.nesdev.org/obelisk-6502-guide/reference.html
 
 # TODO:
+# * implement ppu
+# * lots of cleanup / refactoring
+#   * break instructions into single cycles
+#   * consider exposing registers to inspection (ie. use vector instead of individual vars)
+# * test interrupts
 # * build tiny sample rom that runs in working emulator
-#   * create .cfg file
+#   * (1) create .cfg file (2) compile do nothing program (3) compile program that loops 
 # FUTURE TO DOS:
 # * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
 # * use "massive" lookups to set flags?
@@ -35,22 +40,6 @@ ROM_BANK_SIZE            = 0x4000
 ROM_UPPER_BANK_OFFSET    = 0xC000
 TOTAL_ADDRESS_SPACE      = 0x10000
 
-# # PPU numbers (for reference)
-# NTSC_FPS = 60
-# NTSC_MS_PER_FRAME = 16.67
-# NTSC_SCANLINES_PER_FRAME = 262
-# NTSC_VLBANK_SCANLINES_PER_FRAME = 20
-# NTSC_CPU_CYCLES_PER_SCANLINE = 113.33
-# NTSC_SCREEN_WIDTH = 256
-# NTSC_SCREEN_HEIGHT = 224  # top and bottom 8 scanlines are cut off
-# PAL_FPS = 50
-# PAL_MS_PER_FRAME = 20
-# PAL_SCANLINES_PER_FRAME = 312
-# PAL_VLBANK_SCANLINES_PER_FRAME = 70
-# PAL_CPU_CYCLES_PER_SCANLINE = 106.56
-# PAL_SCREEN_WIDTH = 256
-# PAL_SCREEN_HEIGHT = 240
-
 # Interrupt types (internal to this emulator)
 NMI = 0
 RESET = 1
@@ -67,6 +56,7 @@ Z = 1 << 1  # zero
 C = 1 << 0  # carry
 
 MASK_V    = ~(V)
+MASK_B    = ~(B)
 MASK_D    = ~(D)
 MASK_I    = ~(I)
 MASK_C    = ~(C)
@@ -130,10 +120,10 @@ mappers = {
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
-def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_on_brk=False):
-    pc, s, a, x, y, p = registers
+def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
+    pc, s, a, x, y, p = registers or (0, 0, 0, 0, 0, 0)
 
-    # NOTE: consider flag letter names reserved: c, z, i, d, b, v, n
+    # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
 
     mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
@@ -194,9 +184,9 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
         # as interrupts are the only exception to normal execution
         nonlocal pc
         nonlocal t, s
-        mem[STACK_OFFSET+s] = new_pc << 8
+        mem[STACK_OFFSET+s] = pc << 8
         s = (s-1) & 0xFF
-        mem[STACK_OFFSET+s] = new_pc & 0xFF
+        mem[STACK_OFFSET+s] = pc & 0xFF
         s = (s-1) & 0xFF
         mem[STACK_OFFSET+s] = p
         s = (s-1) & 0xFF
@@ -204,15 +194,15 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
         pc = new_pc
 
     def _nmi():
-        _trigger_interrupt(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8))
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8)), p)
 
     def _reset():
-        _trigger_interrupt(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8))
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8)), p)
 
     def _irq():
         if p&I:
             return pc  # interrupt disabled
-        _trigger_interrupt(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8))
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8)), p)
 
     # Instructions
 
@@ -480,11 +470,12 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
     
     # BRK (BReaK)
     # Writes flags: B
-    def _00_brk_implied(pc):
+    def _00_brk_implied(_):
         nonlocal p
+        p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
         _irq()
-        p |= B
-    def _00_brk_implied_stop_execution(pc):  # for unit testing / debugging
+        return pc
+    def _00_brk_implied_stop_execution(_):  # for unit testing / debugging
         raise VMStop()
     
     # CMP (CoMPare accumulator)
@@ -1151,7 +1142,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
     def _40_rti_implied(pc):
         nonlocal t, p, s
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s]
+        p = mem[STACK_OFFSET+s] & MASK_B
         s = (s+1) & 0xFF
         pc = mem[STACK_OFFSET+s]
         s = (s+1) & 0xFF
@@ -1321,7 +1312,7 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
     def _28_plp(pc):
         nonlocal t, s, p
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s]
+        p = mem[STACK_OFFSET+s] & MASK_B
         t += 4
         return pc + 1
     
@@ -1513,6 +1504,10 @@ def play(mapper, registers=(0, 0, 0, 0, 0, 0), t=0, do_other_things=None, stop_o
     ops[0x94] = _94_sty_zero_page_indexed_x
     ops[0x8c] = _8c_sty_absolute
 
+    # During normal execution, reset interrupt is called at power-on
+    if registers is None:
+        _reset()
+
     try:
         while True:
             next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
@@ -1651,7 +1646,7 @@ class Cart(object):
         print(f'Default expansion device: {self.default_expansion_device}')
 
 class NES(object):
-    def __init__(self, cart, registers=(0, 0, 0, 0, 0, 0), t=0):
+    def __init__(self, cart, registers=None, t=0):
         self.cart = cart
         self.registers = registers
         self.t = t
@@ -1660,11 +1655,11 @@ class NES(object):
         # Append PRG-ROM then CHR-ROM to memory starting at 0x8000
         for bank_i, bank in enumerate(cart.prg_rom_banks):
             for i in range(0x4000):
-                self.mem[ROM_LOWER_BANK_OFFSET+bank_i*0x4000] = bank[i]
+                self.mem[ROM_LOWER_BANK_OFFSET+bank_i*0x4000+i] = bank[i]
 
     def play_cart(self):
         self.registers, self.t = \
-            play(self.cart.mapper, self.registers, self.t)
+            play(self.mapper, self.registers, self.t)
 
 if __name__ == "__main__":
     import argparse
