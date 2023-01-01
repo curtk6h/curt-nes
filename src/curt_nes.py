@@ -1,9 +1,7 @@
 #!/usr/local/bin/python3
 
-# http://www.6502.org/tutorials/6502opcodes.html
-# https://www.nesdev.org/obelisk-6502-guide/reference.html
-
 # TODO:
+# * add logging option to cli
 # * implement ppu
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
@@ -83,10 +81,6 @@ class Mapper(object):
         
         # Build address lookup (registers not included)
         addr_lookup = array.array('H', (i for i in range(TOTAL_ADDRESS_SPACE)))
-        # first, the rom space
-        prg_rom_length = num_prg_rom_banks * ROM_BANK_SIZE
-        for i in range(0x8000):  # connected/addressable 2 * 16 KB banks
-            addr_lookup[ROM_LOWER_BANK_OFFSET+i] = ROM_LOWER_BANK_OFFSET + (i % prg_rom_length)
         # then RAM mirrors
         for i in range(RAM_MIRRORS_SIZE):
             addr_lookup[RAM_MIRRORS_OFFSET+i] = i % RAM_SIZE
@@ -120,8 +114,15 @@ mappers = {
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
-def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
-    pc, s, a, x, y, p = registers or (0, 0, 0, 0, 0, 0)
+class PPU(object):
+    def __init__(self):
+        pass
+
+    def tick(self):
+        pass
+
+def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
+    pc, s, a, x, y, p = registers or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
 
     # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
 
@@ -162,20 +163,15 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
         addr = mem[i] + y
         t += addr>>8
         return mapper.resolve((addr+(mem[i+1]<<8))%0x10000)
-
-    # Resolve 16-bit addresses (for assigning to pc) in various modes
-
-    def _resolve_absolute16(mem, pc):
-        return ((mem[pc+1] | (mem[pc+2]<<8)))
-    def _resolve_indirect16(mem, pc):
+    def _resolve_indirect(mem, pc):
         addr = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
-        return mem[addr] | (mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8)
-    def _resolve_relative16(mem, pc):
+        return mapper.resolve(mem[addr]|(mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8))
+    def _resolve_relative(mem, pc):
         nonlocal t
         rel_addr = signed8(mem[pc+1])
         pc += 2
         t += (((pc&0xFF)+rel_addr)>>8) & 1
-        return pc + rel_addr
+        return mapper.resolve(pc+rel_addr)
 
     # Interrupts
 
@@ -194,15 +190,15 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
         pc = new_pc
 
     def _nmi():
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8)), p)
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8)))
 
     def _reset():
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8)), p)
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8)))
 
     def _irq():
         if p&I:
             return pc  # interrupt disabled
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8)), p)
+        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8)))
 
     # Instructions
 
@@ -403,13 +399,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
     # BMI (Branch on MInus)
     def _30_bmi(pc):
         nonlocal t
         if p & N:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -421,13 +417,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
     # BVS (Branch on oVerflow Set)
     def _70_bvs(pc):
         nonlocal t
         if p & V:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -439,13 +435,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
     # BCS (Branch on Carry Set)
     def _b0_bcs(pc):
         nonlocal t
         if p & C:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -457,13 +453,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
             return pc + 2
         else:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
     # BEQ (Branch on EQual)
     def _f0_beq(pc):
         nonlocal t
         if p & Z:
             t += 3
-            return _resolve_relative16(mem, pc)
+            return _resolve_relative(mem, pc)
         else:
             t += 2
             return pc + 2
@@ -750,17 +746,17 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
     def _4c_jmp_absolute(pc):
         nonlocal t
         t += 3
-        return _resolve_absolute16(mem, pc)
+        return _resolve_absolute(mem, pc)
     def _6c_jmp_indirect(pc):
         nonlocal t
         t += 5
-        return _resolve_indirect16(mem, pc)
+        return _resolve_indirect(mem, pc)
     
     # JSR (Jump to SubRoutine)
     # Writes flags: none
     def _20_jsr_absolute(pc):
         nonlocal t, s
-        to = _resolve_absolute16(mem, pc)
+        to = _resolve_absolute(mem, pc)
         pc += 2 # 3 - 1 (offset by one before storing on stack)
         mem[STACK_OFFSET+s] = pc >> 8
         s = (s-1) & 0xFF
@@ -1512,6 +1508,10 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False):
         while True:
             next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
             while t < next_t:  # catch up with external system(s)
+                if print_cpu_log:
+                    op_labels = [] # todo: fill this in
+                    operands = ' '.join([f'{mem[pc2]:02X}' for pc2 in range(pc, pc+3)]) # todo: use lookup for num operands
+                    print(f'{pc:02X} {operands}') #  {op_labels[mem[pc]]}')
                 pc = ops[mem[pc]](pc)
     except VMStop:
         pass  # clean exit
@@ -1646,26 +1646,29 @@ class Cart(object):
         print(f'Default expansion device: {self.default_expansion_device}')
 
 class NES(object):
-    def __init__(self, cart, registers=None, t=0):
+    def __init__(self, cart, registers=None, t=0, print_cpu_log=False):
+        self.ppu = PPU()
         self.cart = cart
         self.registers = registers
         self.t = t
-        self.mem = array.array('B', (0 for _ in range(0x8000+len(cart.prg_rom_banks)*0x4000)))
+        self.mem = array.array('B', (0 for _ in range(0x10000)))
         self.mapper = cart.mapper_cls(self.mem, len(cart.prg_rom_banks), len(cart.chr_rom_banks))
+        self.print_cpu_log = print_cpu_log
         # Append PRG-ROM then CHR-ROM to memory starting at 0x8000
-        for bank_i, bank in enumerate(cart.prg_rom_banks):
+        for bank_i in range(max(len(cart.prg_rom_banks), 2)):
+            bank = cart.prg_rom_banks[bank_i%len(cart.prg_rom_banks)]
             for i in range(0x4000):
                 self.mem[ROM_LOWER_BANK_OFFSET+bank_i*0x4000+i] = bank[i]
 
     def play_cart(self):
-        self.registers, self.t = \
-            play(self.mapper, self.registers, self.t)
+        self.registers, self.t = play(self.mapper, self.registers, self.t, print_cpu_log=self.print_cpu_log)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Curt NES v0.0.0')
     parser.add_argument('rom')
     parser.add_argument('--print-cart-config', action='store_true')
+    parser.add_argument('--print-cpu-log', action='store_true')
     args = parser.parse_args()
 
     cart = Cart.from_ines(open(args.rom, 'rb'))
@@ -1674,5 +1677,6 @@ if __name__ == "__main__":
         cart.print_config()
         exit(0)
 
-    nes = NES(cart)
+    # Currently overriding registers for nestest.nes!
+    nes = NES(cart, registers=(0xC000, 0xFC, 0x00, 0x00, 0x00, 0x34), print_cpu_log=args.print_cpu_log)
     nes.play_cart()
