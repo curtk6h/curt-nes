@@ -2,6 +2,7 @@
 
 # TODO:
 # * add logging option to cli
+# * default status to unused = 1 and removed redundant sets
 # * implement ppu
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
@@ -46,7 +47,7 @@ IRQ = 2
 # Processor statuses
 N = 1 << 7  # negative
 V = 1 << 6  # overflow
-_ = 1 << 5  # unused
+U = 1 << 5  # unused
 B = 1 << 4  # break command
 D = 1 << 3  # decimal mode
 I = 1 << 2  # interrupt disable
@@ -62,6 +63,95 @@ MASK_NZ   = ~(N|Z)
 MASK_NVZ  = ~(N|V|Z)
 MASK_NVZC = ~(N|V|Z|C)
 MASK_NZC  = ~(N|Z|C)
+
+# For debugging purposes
+INSTRUCTION_LABELS = [
+    'BRK', 'ORA', '   ', '   ', '   ', 'ORA', 'ASL', '   ', 'PHP', 'ORA', 'ASL', '   ', '   ', 'ORA', 'ASL', '   ',
+    'BPL', 'ORA', '   ', '   ', '   ', 'ORA', 'ASL', '   ', 'CLC', 'ORA', '   ', '   ', '   ', 'ORA', 'ASL', '   ',
+    'JSR', 'AND', '   ', '   ', 'BIT', 'AND', 'ROL', '   ', 'PLP', 'AND', 'ROL', '   ', 'BIT', 'AND', 'ROL', '   ',
+    'BMI', 'AND', '   ', '   ', '   ', 'AND', 'ROL', '   ', 'SEC', 'AND', '   ', '   ', '   ', 'AND', 'ROL', '   ',
+    'RTI', 'EOR', '   ', '   ', '   ', 'EOR', 'LSR', '   ', 'PHA', 'EOR', 'LSR', '   ', 'JMP', 'EOR', 'LSR', '   ',
+    'BVC', 'EOR', '   ', '   ', '   ', 'EOR', 'LSR', '   ', 'CLI', 'EOR', '   ', '   ', '   ', 'EOR', 'LSR', '   ',
+    'RTS', 'ADC', '   ', '   ', '   ', 'ADC', 'ROR', '   ', 'PLA', 'ADC', 'ROR', '   ', 'JMP', 'ADC', 'ROR', '   ',
+    'BVS', 'ADC', '   ', '   ', '   ', 'ADC', 'ROR', '   ', 'SEI', 'ADC', '   ', '   ', '   ', 'ADC', 'ROR', '   ',
+    '   ', 'STA', '   ', '   ', 'STY', 'STA', 'STX', '   ', 'DEY', '   ', 'TXA', '   ', 'STY', 'STA', 'STX', '   ',
+    'BCC', 'STA', '   ', '   ', 'STY', 'STA', 'STX', '   ', 'TYA', 'STA', 'TXS', '   ', '   ', 'STA', '   ', '   ',
+    'LDY', 'LDA', 'LDX', '   ', 'LDY', 'LDA', 'LDX', '   ', 'TAY', 'LDA', 'TAX', '   ', 'LDY', 'LDA', 'LDX', '   ',
+    'BCS', 'LDA', '   ', '   ', 'LDY', 'LDA', 'LDX', '   ', 'CLV', 'LDA', 'TSX', '   ', 'LDY', 'LDA', 'LDX', '   ',
+    'CPY', 'CMP', '   ', '   ', 'CPY', 'CMP', 'DEC', '   ', 'INY', 'CMP', 'DEX', '   ', 'CPY', 'CMP', 'DEC', '   ',
+    'BNE', 'CMP', '   ', '   ', '   ', 'CMP', 'DEC', '   ', 'CLD', 'CMP', '   ', '   ', '   ', 'CMP', 'DEC', '   ',
+    'CPX', 'SBC', '   ', '   ', 'CPX', 'SBC', 'INC', '   ', 'INX', 'SBC', 'NOP', '   ', 'CPX', 'SBC', 'INC', '   ',
+    'BEQ', 'SBC', '   ', '   ', '   ', 'SBC', 'INC', '   ', 'SED', 'SBC', '   ', '   ', '   ', 'SBC', 'INC', '   '
+]
+
+INSTRUCTION_BYTES = [
+    1, 2, 0, 0, 0, 2, 2, 0, 1, 2, 1, 0, 0, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
+    3, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
+    1, 2, 0, 0, 0, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
+    1, 2, 0, 0, 0, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
+    0, 2, 0, 0, 2, 2, 2, 0, 1, 0, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 0, 3, 0, 0,
+    2, 2, 2, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
+    2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0
+]
+
+# Two tables below use follow constants for address modes:
+# IMPLIED = 0
+# IMMEDIATE = 1
+# ACCUMULATOR = 2
+# ZERO_PAGE = 3
+# ZERO_PAGE_INDEXED_X = 4
+# ZERO_PAGE_INDEXED_Y = 5
+# ABSOLUTE = 6
+# ABSOLUTE_INDEXED_X = 7
+# ABSOLUTE_INDEXED_Y = 8
+# INDEXED_INDIRECT = 9
+# INDIRECT_INDEXED = 10
+# INDIRECT = 11
+# RELATIVE = 12
+
+INSTRUCTION_ADDR_MODES = [
+    0x0, 0x9, 0x0, 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x1, 0x2, 0x0, 0x0, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0,
+    0x6, 0x9, 0x0, 0x0, 0x3, 0x3, 0x3, 0x0, 0x0, 0x1, 0x2, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0,
+    0x0, 0x9, 0x0, 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x1, 0x2, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0,
+    0x0, 0x9, 0x0, 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x1, 0x2, 0x0, 0xB, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0,
+    0x0, 0x9, 0x0, 0x0, 0x3, 0x3, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x4, 0x4, 0x5, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x0, 0x0,
+    0x1, 0x9, 0x1, 0x0, 0x3, 0x3, 0x3, 0x0, 0x0, 0x1, 0x0, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x4, 0x4, 0x5, 0x0, 0x0, 0x8, 0x0, 0x0, 0x7, 0x7, 0x8, 0x0,
+    0x1, 0x9, 0x0, 0x0, 0x3, 0x3, 0x3, 0x0, 0x0, 0x1, 0x0, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0,
+    0x1, 0x9, 0x0, 0x0, 0x3, 0x3, 0x3, 0x0, 0x0, 0x1, 0x0, 0x0, 0x6, 0x6, 0x6, 0x0,
+    0xC, 0xA, 0x0, 0x0, 0x0, 0x4, 0x4, 0x0, 0x0, 0x8, 0x0, 0x0, 0x0, 0x7, 0x7, 0x0
+]
+
+ADDR_MODE_FORMATS = [
+    lambda mem, pc, operands: '',
+    lambda mem, pc, operands: ' #${:02X}'   .format(operands[1]),
+    lambda mem, pc, operands: ' A',
+    lambda mem, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], mem[operands[1]]),
+    lambda mem, pc, operands: ' ${:02X},X'  .format(operands[1]),
+    lambda mem, pc, operands: ' ${:02X},Y'  .format(operands[1]),
+    lambda mem, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
+    lambda mem, pc, operands: ' ${:04X},X'  .format(operands[1]|(operands[2]<<8)),
+    lambda mem, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
+    lambda mem, pc, operands: ' (${:02X},X)'.format(operands[1]),
+    lambda mem, pc, operands: ' (${:02X}),Y'.format(operands[1]),
+    lambda mem, pc, operands: ' (${:02X})'  .format(operands[1]|(operands[2]<<8)),
+    lambda mem, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
+]
 
 class VMStop(Exception):
     pass
@@ -139,33 +229,40 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _resolve_zero_page(mem, pc):
         return mem[pc+1]
     def _resolve_zero_page_indexed_x(mem, pc):
-        return (mem[pc+1]+x)%0x100
+        return (mem[pc+1]+x) & 0xFF
     def _resolve_zero_page_indexed_y(mem, pc):
-        return (mem[pc+1]+y)%0x100
+        return (mem[pc+1]+y) & 0xFF
     def _resolve_absolute(mem, pc):
         return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))))
     def _resolve_absolute_indexed_x(mem, pc):
         nonlocal t
         addr = mem[pc+1] + x
         t += addr>>8
-        return mapper.resolve((addr+(mem[pc+2]<<8))%0x10000)
+        return mapper.resolve((addr+(mem[pc+2]<<8))&0xFFFF)
     def _resolve_absolute_indexed_y(mem, pc):
         nonlocal t
         addr = mem[pc+1] + y
         t += addr>>8
-        return mapper.resolve((addr+(mem[pc+2]<<8))%0x10000)
+        return mapper.resolve((addr+(mem[pc+2]<<8))&0xFFFF)
+    def _resolve_absolute_indexed_x_no_extra_cycle(mem, pc):
+        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+x)&0xFFFF)
+    def _resolve_absolute_indexed_y_no_extra_cycle(mem, pc):
+        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+y)&0xFFFF)
     def _resolve_indexed_indirect(mem, pc):
-        i = (mem[pc+1]+x) % 0x100
-        return mapper.resolve(mem[i]|(mem[i+1]<<8))
+        i = mem[pc+1] + x
+        return mapper.resolve(mem[i&0xFF]|(mem[(i+1)&0xFF]<<8))
     def _resolve_indirect_indexed(mem, pc):
         nonlocal t
-        i = (mem[pc+1])
+        i = mem[pc+1]
         addr = mem[i] + y
         t += addr>>8
-        return mapper.resolve((addr+(mem[i+1]<<8))%0x10000)
+        return mapper.resolve((addr+(mem[(i+1)&0xFF]<<8))&0xFFFF)
+    def _resolve_indirect_indexed_no_extra_cycle(mem, pc):
+        i = mem[pc+1]
+        return mapper.resolve(((mem[i]|(mem[(i+1)&0xFF]<<8))+y)&0xFFFF)
     def _resolve_indirect(mem, pc):
         addr = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
-        return mapper.resolve(mem[addr]|(mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8))
+        return mapper.resolve(mem[addr]|(mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8))  # NOTE: byte two cannot cross page
     def _resolve_relative(mem, pc):
         nonlocal t
         rel_addr = signed8(mem[pc+1])
@@ -184,7 +281,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         s = (s-1) & 0xFF
         mem[STACK_OFFSET+s] = pc & 0xFF
         s = (s-1) & 0xFF
-        mem[STACK_OFFSET+s] = p
+        mem[STACK_OFFSET+s] = p | U
         s = (s-1) & 0xFF
         t += 7
         pc = new_pc
@@ -367,7 +464,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _1e_asl_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         m = mem[addr32]
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
@@ -476,52 +573,51 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     
     # CMP (CoMPare accumulator)
     # Writes flags: N Z C
-    # Compare sets flags as if a subtraction had been carried out. If the value in the accumulator is equal or greater than the compared value, the Carry will be set. The equal (Z) and negative (N) flags will be set based on equality or lack thereof and the sign (i.e. A>=$80) of the accumulator.
     def _c9_cmp_immediate(pc):
         nonlocal t, p
-        r = a - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_immediate(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c5_cmp_zero_page(pc):
         nonlocal t, p
-        r = a - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_zero_page(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _d5_cmp_zero_page_indexed_x(pc):
         nonlocal t, p
-        r = a - mem[_resolve_zero_page_indexed_x(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_zero_page_indexed_x(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 2
     def _cd_cmp_absolute(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_absolute(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _dd_cmp_absolute_indexed_x(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute_indexed_x(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_absolute_indexed_x(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _d9_cmp_absolute_indexed_y(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute_indexed_y(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_absolute_indexed_y(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _c1_cmp_indexed_indirect(pc):
         nonlocal t, p
-        r = a - mem[_resolve_indexed_indirect(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_indexed_indirect(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 6
         return pc + 2
     def _d1_cmp_indirect_indexed(pc):
         nonlocal t, p
-        r = a - mem[_resolve_indirect_indexed(mem, pc)] - (~p&C)
+        r = a - mem[_resolve_indirect_indexed(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 5
         return pc + 2
@@ -530,19 +626,19 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z C
     def _e0_cpx_immediate(pc):
         nonlocal t, p
-        r = x - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        r = x - mem[_resolve_immediate(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _e4_cpx_zero_page(pc):
         nonlocal t, p
-        r = x - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        r = x - mem[_resolve_zero_page(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _ec_cpx_absolute(pc):
         nonlocal t, p
-        r = x - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        r = x - mem[_resolve_absolute(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
@@ -551,19 +647,19 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z C
     def _c0_cpy_immediate(pc):
         nonlocal t, p
-        r = y - mem[_resolve_immediate(mem, pc)] - (~p&C)
+        r = y - mem[_resolve_immediate(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c4_cpy_zero_page(pc):
         nonlocal t, p
-        r = y - mem[_resolve_zero_page(mem, pc)] - (~p&C)
+        r = y - mem[_resolve_zero_page(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _cc_cpy_absolute(pc):
         nonlocal t, p
-        r = y - mem[_resolve_absolute(mem, pc)] - (~p&C)
+        r = y - mem[_resolve_absolute(mem, pc)]
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
@@ -599,7 +695,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _de_dec_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         m = mem[addr32]
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
@@ -733,7 +829,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _fe_inc_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         m = mem[addr32]
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
@@ -920,7 +1016,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _5e_lsr_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         m = mem[addr32]
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
@@ -1080,7 +1176,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _3e_rol_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         r = (mem[addr32]<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         mapper.write(addr32, r&0xFF)
@@ -1125,7 +1221,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _7e_ror_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
+        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
         m = mem[addr32]
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
@@ -1138,7 +1234,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _40_rti_implied(pc):
         nonlocal t, p, s
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s] & MASK_B
+        p = mem[STACK_OFFSET+s] & MASK_B | U
         s = (s+1) & 0xFF
         pc = mem[STACK_OFFSET+s]
         s = (s+1) & 0xFF
@@ -1163,7 +1259,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         nonlocal t, p, a
         m = mem[_resolve_immediate(mem, pc)]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 2
         return pc + 2
@@ -1172,7 +1268,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_zero_page(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 3
         return pc + 2
@@ -1181,7 +1277,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_zero_page_indexed_x(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 2
@@ -1190,7 +1286,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_absolute(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
@@ -1199,7 +1295,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_absolute_indexed_x(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
@@ -1208,7 +1304,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_absolute_indexed_y(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
@@ -1217,7 +1313,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_indexed_indirect(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 6
         return pc + 2
@@ -1226,7 +1322,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         addr32 = _resolve_indirect_indexed(mem, pc)
         m = mem[addr32]
         r = a - m - (~p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 5
         return pc + 2
@@ -1250,12 +1346,12 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _9d_sta_absolute_indexed_x(pc):
         nonlocal t
-        mapper.write(_resolve_absolute_indexed_x(mem, pc), a)
+        mapper.write(_resolve_absolute_indexed_x_no_extra_cycle(mem, pc), a)
         t += 5
         return pc + 3
     def _99_sta_absolute_indexed_y(pc):
         nonlocal t
-        mapper.write(_resolve_absolute_indexed_y(mem, pc), a)
+        mapper.write(_resolve_absolute_indexed_y_no_extra_cycle(mem, pc), a)
         t += 5
         return pc + 3
     def _81_sta_indexed_indirect(pc):
@@ -1265,7 +1361,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _91_sta_indirect_indexed(pc):
         nonlocal t
-        mapper.write(_resolve_indirect_indexed(mem, pc), a)
+        mapper.write(_resolve_indirect_indexed_no_extra_cycle(mem, pc), a)
         t += 6
         return pc + 2
     
@@ -1278,8 +1374,9 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 1
     # TSX (Transfer Stack ptr to X)
     def _ba_tsx(pc):
-        nonlocal t, x
+        nonlocal t, x, p
         x = s
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
         return pc + 1
     # PHA (PusH Accumulator)
@@ -1300,7 +1397,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # PHP (PusH Processor status)
     def _08_php(pc):
         nonlocal t, s
-        mem[STACK_OFFSET+s] = p
+        mem[STACK_OFFSET+s] = p | B | U
         s = (s-1) & 0xFF
         t += 3
         return pc + 1
@@ -1308,7 +1405,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _28_plp(pc):
         nonlocal t, s, p
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s] & MASK_B
+        p = mem[STACK_OFFSET+s] & MASK_B | U  # always clear break bit, set unused bit 
         t += 4
         return pc + 1
     
@@ -1509,9 +1606,16 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
             while t < next_t:  # catch up with external system(s)
                 if print_cpu_log:
-                    op_labels = [] # todo: fill this in
-                    operands = ' '.join([f'{mem[pc2]:02X}' for pc2 in range(pc, pc+3)]) # todo: use lookup for num operands
-                    print(f'{pc:02X} {operands}') #  {op_labels[mem[pc]]}')
+                    op = mem[pc]
+                    num_operands = INSTRUCTION_BYTES[op]
+                    operands = [(mem[pc+operand_i] if operand_i < num_operands else None) for operand_i in range(3)]
+                    operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                    addr_mode = INSTRUCTION_ADDR_MODES[op]
+                    addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                    log_line = f'{pc:02X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mem, pc, operands)}'
+                    log_line += ' ' * (48-len(log_line))
+                    log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
+                    print(log_line)
                 pc = ops[mem[pc]](pc)
     except VMStop:
         pass  # clean exit
@@ -1677,6 +1781,6 @@ if __name__ == "__main__":
         cart.print_config()
         exit(0)
 
-    # Currently overriding registers for nestest.nes!
-    nes = NES(cart, registers=(0xC000, 0xFC, 0x00, 0x00, 0x00, 0x34), print_cpu_log=args.print_cpu_log)
+    # Currently overriding registers, time for nestest.nes!
+    nes = NES(cart, registers=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log)
     nes.play_cart()
