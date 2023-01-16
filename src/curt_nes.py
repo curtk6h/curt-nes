@@ -1,9 +1,14 @@
 #!/usr/local/bin/python3
 
 # TODO:
-# * add logging option to cli
-# * default status to unused = 1 and removed redundant sets
 # * implement ppu
+#   * memory mapper
+#   * dma transfer
+#   * begin tick
+#   * test
+#   * figure out initialization/syncing w/ cpu
+#   * remove unused constants etc
+# * default status to unused = 1 and removed redundant sets
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
 #   * consider exposing registers to inspection (ie. use vector instead of individual vars)
@@ -149,9 +154,46 @@ ADDR_MODE_FORMATS = [
     lambda mem, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
     lambda mem, pc, operands: ' (${:02X},X)'.format(operands[1]),
     lambda mem, pc, operands: ' (${:02X}),Y'.format(operands[1]),
-    lambda mem, pc, operands: ' (${:02X})'  .format(operands[1]|(operands[2]<<8)),
+    lambda mem, pc, operands: ' (${:04X})'  .format(operands[1]|(operands[2]<<8)),
     lambda mem, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
 ]
+
+# PPU memory constants
+PPUCTRL	  = 0x2000 # VPHB SINN	NMI enable (V), PPU master/slave (P), sprite height (H), background tile select (B), sprite tile select (S), increment mode (I), nametable select (NN)
+PPUMASK   = 0x2001 # BGRs bMmG	color emphasis (BGR), sprite enable (s), background enable (b), sprite left column enable (M), background left column enable (m), greyscale (G)
+PPUSTATUS = 0x2002 # VSO- ----	vblank (V), sprite 0 hit (S), sprite overflow (O); read resets write pair for $2005/$2006
+OAMADDR   = 0x2003 # aaaa aaaa	OAM read/write address
+OAMDATA   = 0x2004 # dddd dddd	OAM data read/write
+# VRAM reading and writing shares the same internal address register that rendering uses
+PPUSCROLL = 0x2005 # xxxx xxxx	fine scroll position (two writes: X scroll, Y scroll)
+PPUADDR   = 0x2006 # aaaa aaaa	PPU read/write address (two writes: most significant byte, least significant byte)
+PPUDATA   = 0x2007 # dddd dddd	PPU data read/write
+OAMDMA    = 0x4014 # aaaa aaaa	OAM DMA high address
+
+# If the PPU is currently in vertical blank, and the PPUSTATUS ($2002) vblank flag is still set (1), changing the NMI flag in bit 7 of $2000 from 0 to 1 will immediately generate an NMI. This can result in graphical errors (most likely a misplaced scroll) if the NMI routine is executed too late in the blanking period to finish on time. To avoid this problem it is prudent to read $2002 immediately before writing $2000 to clear the vblank flag.
+# After power/reset, writes to this register are ignored for about 30,000 cycles.
+PPUCTRL_V = 0x80 # Generate an NMI at the start of the vertical blanking interval (0: off; 1: on)
+PPUCTRL_P = 0x40 # PPU master/slave select (0: read backdrop from EXT pins; 1: output color on EXT pins)
+PPUCTRL_H = 0x20 # Sprite size (0: 8x8 pixels; 1: 8x16 pixels – see PPU OAM#Byte 1)
+PPUCTRL_B = 0x10 # Background pattern table address (0: $0000; 1: $1000)
+PPUCTRL_S = 0x08 # Sprite pattern table address for 8x8 sprites (0: $0000; 1: $1000; ignored in 8x16 mode)
+PPUCTRL_I = 0x04 # VRAM address increment per CPU read/write of PPUDATA (0: add 1, going across; 1: add 32, going down)
+PPUCTRL_N = 0x03 # Base nametable address (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
+
+PPU_ADDR_INCREMENTS = [1, 0, 0, 0, 32]
+
+PPUMASK_B = 0x80 # Emphasize blue
+PPUMASK_G = 0x40 # Emphasize green (red on PAL/Dendy)
+PPUMASK_R = 0x20 # Emphasize red (green on PAL/Dendy)
+PPUMASK_s = 0x10 # 1: Show sprites
+PPUMASK_b = 0x08 # 1: Show background
+PPUMASK_M = 0x04 # 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
+PPUMASK_m = 0x02 # 1: Show background in leftmost 8 pixels of screen, 0: Hide
+PPUMASK_g = 0x01 # Greyscale (0: normal color, 1: produce a greyscale display)
+
+PPUSTATUS_V = 0x80
+PPUSTATUS_S = 0x40
+PPUSTATUS_O = 0x20
 
 class VMStop(Exception):
     pass
@@ -187,7 +229,7 @@ class Mapper(object):
     #     """
     #     return self._addr_lookup
 
-    def resolve(self, addr16):
+    def resolve(self, addr16):  # logical to physical address space
         return self._addr_lookup[addr16]
 
     def read(self, addr32):
@@ -206,9 +248,120 @@ def signed8(value):
 
 class PPU(object):
     def __init__(self):
-        pass
+        self.mem = array.array('B', (0 for _ in range(0x10000)))
+        self.oam = array.array('B', (0 for _ in range(0x100)))
+        self.cpu_io_value = 0x0000
+        self.cpu_io_write_state = 0
+        self.ppu_status = 0x00
+        self.ppu_ctrl = 0x00
+        self.ppu_mask = 0x00
+        self.ppu_addr = 0x0000  # 15 bits
+        self.oam_addr = 0x00
+        self.x = 0x0  # 3 bits
+        self.t = 0
+        
+        def read_nothing():
+            pass
+        def read_ppu_status():
+            # ........ VSO.....
+            self.cpu_io_value ^= (self.cpu_io_value^self.ppu_status) & 0x00E0
+            self.ppu_status &= 0xFF6F  # clear vblank after reading
+        def read_oam_data():
+            self.cpu_io_value ^= (self.cpu_io_value^self.oam[self.oam_addr]) & 0x00FF
+            self.oam_addr = (self.oam_addr+1) & 0xFF
+        def read_ppu_data():
+            self.cpu_io_value = self.mem[self.ppu_addr]
+            self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
+        self.cpu_readers = [
+            read_nothing,
+            read_nothing,
+            read_ppu_status,
+            read_nothing,
+            read_oam_data,
+            read_nothing,
+            read_nothing,
+            read_ppu_data
+        ]
 
-    def tick(self):
+        def write_nothing():
+            pass
+        def write_ppu_ctrl():
+            if self.t < 30000:
+                return
+            if self.ppu_status & self.cpu_io_value & ~self.ppu_ctrl & 0x80:
+                pass # TODO: immediately generate an NMI! still set ppuctrl value?
+            self.ppu_ctrl = self.cpu_io_value & 0xFF
+        def write_ppu_mask():
+            self.ppu_mask = self.cpu_io_value & 0xFF
+        def write_oam_addr():
+            self.oam_addr = self.cpu_io_value & 0xFF
+        def write_oam_data():
+            # TODO: ignore during rendering?
+            # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
+            self.oam[self.oam_addr] = self.cpu_io_value & 0xFF
+            self.oam_addr = (self.oam_addr + 1) & 0xFF
+        def write_ppu_scroll_0():
+            # ........ ...XXXXX (course X)
+            self.x = self.cpu_io_value & 0x07
+            self.cpu_io_value ^= (self.cpu_io_value^(self.cpu_io_value>>3)) & 0x001F
+        def write_ppu_scroll_1():
+            # .yyy..YY YYY..... (fine y, course Y)
+            self.cpu_io_value ^= (self.cpu_io_value^((self.cpu_io_value<<12)|(self.cpu_io_value<<5))) & 0x73E0
+        def write_ppu_addr_0():
+            # .0AAAAAA ........ (address high 6 bits + clear 15th bit)
+            self.cpu_io_value ^= (self.cpu_io_value^(self.cpu_io_value&0x3F00)) & 0x7F00
+        def write_ppu_addr_1():
+            # ........ AAAAAAAA (address low 8 bits)
+            self.cpu_io_value ^= (self.cpu_io_value^self.cpu_io_value) & 0x00FF
+            self.ppu_addr = self.cpu_io_value 
+        def write_ppu_data():
+            self.write(self.ppu_addr, self.cpu_io_value&0xFF)
+            self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
+
+        self.cpu_writers = [
+            # first write
+            write_ppu_ctrl,
+            write_ppu_mask,
+            write_nothing,
+            write_oam_addr,
+            write_oam_data,
+            write_ppu_scroll_0,
+            write_ppu_addr_0,
+            write_ppu_data,
+            # second write
+            write_ppu_ctrl,
+            write_ppu_mask,
+            write_nothing,
+            write_oam_addr,
+            write_oam_data,
+            write_ppu_scroll_1,
+            write_ppu_addr_1,
+            write_ppu_data
+        ]
+
+    def cpu_read(self, reg_idx):
+        self.cpu_readers[reg_idx]()
+        self.cpu_io_write_state = 0
+        return self.cpu_io_value & 0xFF
+
+    def cpu_write(self, reg_idx, value):
+        self.cpu_io_value = value
+        self.cpu_writers[reg_idx<<self.cpu_io_write_state]()
+        self.cpu_io_write_state ^= 1
+
+    def cpu_write_oam_dma(self, cpu_mem, cpu_mem_page): # 0x4014
+        pass # TODO: write oam data!
+
+    def resolve_ppu_addr(self, addr16):
+        return addr16  # TODO: do mirroring, whatever else here, then inline usages and consider removing this function
+
+    def read(self):
+        return self.mem[self.resolve_ppu_addr(self.ppu_addr)]
+
+    def write(self):
+        self.mem[self.resolve_ppu_addr(self.ppu_addr)] = self.cpu_io_value & 0xFF
+
+    def tick(self, t_elapsed):
         pass
 
 def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
@@ -1612,7 +1765,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
                     operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
                     addr_mode = INSTRUCTION_ADDR_MODES[op]
                     addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                    log_line = f'{pc:02X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mem, pc, operands)}'
+                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mem, pc, operands)}'
                     log_line += ' ' * (48-len(log_line))
                     log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                     print(log_line)
