@@ -2,12 +2,14 @@
 
 # TODO:
 # * implement ppu
-#   * memory mapper
+#   * connect to cpu memory: make read/write lookups without worrying too much about advanced mappers
+#   * test registers
+#   * ppu memory / mapper
 #   * dma transfer
-#   * begin tick
-#   * test
-#   * figure out initialization/syncing w/ cpu
+#   * implement rendering
+#   * tick / figure out initialization/syncing w/ cpu
 #   * remove unused constants etc
+#   * add pygame and draw to screen
 # * default status to unused = 1 and removed redundant sets
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
@@ -18,7 +20,7 @@
 # FUTURE TO DOS:
 # * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
 # * use "massive" lookups to set flags?
-# * or at least, reduce flags setting as much as possible (ex. ((r>>8)&X) == (r>>8))
+# * or at least, reduce flags setting as much as possible (ex. ((r>>8)&X) == (r>>8)) OR p ^= (p ^ a) & MASK etc)
 
 import array
 
