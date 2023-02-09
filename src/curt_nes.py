@@ -1,6 +1,7 @@
 #!/usr/local/bin/python3
 
 # TODO:
+# * rename: crazyNES, coolNES, nneess, HI-NES (crown icon)
 # * implement ppu
 #   * connect to cpu memory: make read/write lookups without worrying too much about advanced mappers
 #   * test registers
@@ -23,6 +24,7 @@
 # * or at least, reduce flags setting as much as possible (ex. ((r>>8)&X) == (r>>8)) OR p ^= (p ^ a) & MASK etc)
 
 import array
+import os
 
 # Memory addressing
 ZERO_PAGE_OFFSET         = 0x0000
@@ -145,19 +147,19 @@ INSTRUCTION_ADDR_MODES = [
 ]
 
 ADDR_MODE_FORMATS = [
-    lambda mem, pc, operands: '',
-    lambda mem, pc, operands: ' #${:02X}'   .format(operands[1]),
-    lambda mem, pc, operands: ' A',
-    lambda mem, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], mem[operands[1]]),
-    lambda mem, pc, operands: ' ${:02X},X'  .format(operands[1]),
-    lambda mem, pc, operands: ' ${:02X},Y'  .format(operands[1]),
-    lambda mem, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
-    lambda mem, pc, operands: ' ${:04X},X'  .format(operands[1]|(operands[2]<<8)),
-    lambda mem, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
-    lambda mem, pc, operands: ' (${:02X},X)'.format(operands[1]),
-    lambda mem, pc, operands: ' (${:02X}),Y'.format(operands[1]),
-    lambda mem, pc, operands: ' (${:04X})'  .format(operands[1]|(operands[2]<<8)),
-    lambda mem, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
+    lambda mapper, pc, operands: '',
+    lambda mapper, pc, operands: ' #${:02X}'   .format(operands[1]),
+    lambda mapper, pc, operands: ' A',
+    lambda mapper, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], mapper.read(operands[1])),
+    lambda mapper, pc, operands: ' ${:02X},X'  .format(operands[1]),
+    lambda mapper, pc, operands: ' ${:02X},Y'  .format(operands[1]),
+    lambda mapper, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
+    lambda mapper, pc, operands: ' ${:04X},X'  .format(operands[1]|(operands[2]<<8)),
+    lambda mapper, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
+    lambda mapper, pc, operands: ' (${:02X},X)'.format(operands[1]),
+    lambda mapper, pc, operands: ' (${:02X}),Y'.format(operands[1]),
+    lambda mapper, pc, operands: ' (${:04X})'  .format(operands[1]|(operands[2]<<8)),
+    lambda mapper, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
 ]
 
 # PPU memory constants
@@ -201,44 +203,71 @@ class VMStop(Exception):
     pass
 
 class Mapper(object):
-    """
-    This Mapper class is responsible for memory mapping done by the
-    main bus (which doesn't change per cartridge but done here for efficiency)
-    and the cartidge mapper chip.
-    """
     mapper_num = 0
 
-    def __init__(self, mem, num_prg_rom_banks, num_chr_rom_banks):
-        self.mem = mem
-        self.num_prg_rom_banks = num_prg_rom_banks
-        self.num_chr_rom_banks = num_chr_rom_banks
-        
-        # Build address lookup (registers not included)
-        addr_lookup = array.array('H', (i for i in range(TOTAL_ADDRESS_SPACE)))
-        # then RAM mirrors
-        for i in range(RAM_MIRRORS_SIZE):
-            addr_lookup[RAM_MIRRORS_OFFSET+i] = i % RAM_SIZE
-        # then PPU mirrors
-        for i in range(PPU_REG_MIRRORS_SIZE):
-            addr_lookup[PPU_REG_MIRRORS_OFFSET+i] = PPU_REGS_OFFSET + (i%PPU_REGS_SIZE)
+    def __init__(self, ram, vram, prg_rom_banks, prg_ram, chr_rom, chr_ram, ppu_read, ppu_write, apu_read, apu_write):
+        self.ram = ram
+        self.vram = vram
+        self.prg_rom_banks = prg_rom_banks
+        self.prg_rom_bank_0 = prg_rom_banks[0]
+        self.prg_rom_bank_1 = prg_rom_banks[1]
+        self.chr_rom = chr_rom
+        self.chr_ram = chr_ram
+        self.readers = (
+            # ram
+            [lambda addr: ram[addr]] * 0x0800 +
+            [lambda addr: ram[addr-0x0800]] * 0x0800 +
+            [lambda addr: ram[addr-0x1000]] * 0x0800 +
+            [lambda addr: ram[addr-0x1800]] * 0x0800 +
+            # ppu
+            [lambda addr: ppu_read((addr-0x2000)%8)] * 0x2000 + # TODO: expand this for mirrors to factor out modulus
+            # apu
+            [lambda addr: apu_read((addr-0x4000))] * 0x0020 +
+            # cart
+            [lambda addr: 0] * 0x1FE0 + # expansion rom?
+            [lambda addr: prg_ram[addr-0x6000]] * 0x2000 + # prg ram
+            [lambda addr: self.prg_rom_bank_0[addr-0x8000]] * 0x4000 + # prg rom bank 0
+            [lambda addr: self.prg_rom_bank_1[addr-0xC000]] * 0x4000   # prg rom bank 1
+        )
+        assert len(self.readers) == 0x10000
 
-        self._addr_lookup = addr_lookup
+        def write_ram_0(addr, value):
+            ram[addr] = value
+        def write_ram_1(addr, value):
+            ram[addr-0x0800] = value
+        def write_ram_2(addr, value):
+            ram[addr-0x1000] = value
+        def write_ram_3(addr, value):
+            ram[addr-0x1800] = value
+        def write_prg_ram(addr, value):
+            prg_ram[addr-0x6000] = value
+        def write_prg_rom_bank_0(addr, value):
+            pass # self.prg_rom_bank_0[addr-0x8000] = value
+        def write_prg_rom_bank_1(addr, value):
+            pass # self.prg_rom_bank_1[addr-0xC000] = value
+        self.writers = (
+            # ram
+            [write_ram_0] * 0x0800 +
+            [write_ram_1] * 0x0800 +
+            [write_ram_2] * 0x0800 +
+            [write_ram_3] * 0x0800 +
+            # ppu
+            [lambda addr, value: ppu_write((addr-0x2000)%8, value)] * 0x2000 + # TODO: expand this for mirrors to factor out modulus
+            # apu
+            [lambda addr, value: apu_write((addr-0x4000), value)] * 0x0020 +
+            # cart
+            [lambda addr, value: None] * 0x1FE0 + # expansion rom?
+            [write_prg_ram] * 0x2000 + # prg ram
+            [write_prg_rom_bank_0] * 0x4000 + # prg rom bank 0
+            [write_prg_rom_bank_1] * 0x4000   # prg rom bank 1
+        )
+        assert len(self.writers) == 0x10000
 
-    # def resolve_lookup(self):
-    #     """
-    #     Returns memory array and address lookup to support accessing memory
-    #     without overhead of a method call.
-    #     """
-    #     return self._addr_lookup
+    def read(self, addr):
+        return self.readers[addr](addr)
 
-    def resolve(self, addr16):  # logical to physical address space
-        return self._addr_lookup[addr16]
-
-    def read(self, addr32):
-        return self.mem[addr32]
-
-    def write(self, addr32, value):
-        self.mem[addr32] = value
+    def write(self, addr, value):
+        self.writers[addr](addr, value)
 
 mappers = {
     mapper.mapper_num: mapper
@@ -249,8 +278,9 @@ def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
 class PPU(object):
-    def __init__(self):
-        self.mem = array.array('B', (0 for _ in range(0x10000)))
+    def __init__(self, vram, chr_mem):
+        self.vram = vram
+        self.chr_mem = chr_mem  # this is probably temporarily here and will move to mapper to handle bank switching
         self.oam = array.array('B', (0 for _ in range(0x100)))
         self.cpu_io_value = 0x0000
         self.cpu_io_write_state = 0
@@ -259,9 +289,11 @@ class PPU(object):
         self.ppu_mask = 0x00
         self.ppu_addr = 0x0000  # 15 bits
         self.oam_addr = 0x00
-        self.x = 0x0  # 3 bits
+        self.fine_x_scroll = 0x0  # 3 bits
+        self.frame_num = 0
+        self.scanline_idx = 0
         self.t = 0
-        
+
         def read_nothing():
             pass
         def read_ppu_status():
@@ -272,7 +304,7 @@ class PPU(object):
             self.cpu_io_value ^= (self.cpu_io_value^self.oam[self.oam_addr]) & 0x00FF
             self.oam_addr = (self.oam_addr+1) & 0xFF
         def read_ppu_data():
-            self.cpu_io_value = self.mem[self.ppu_addr]
+            self.cpu_io_value = self.mapper.read(self.ppu_addr)
             self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
         self.cpu_readers = [
             read_nothing,
@@ -304,7 +336,7 @@ class PPU(object):
             self.oam_addr = (self.oam_addr + 1) & 0xFF
         def write_ppu_scroll_0():
             # ........ ...XXXXX (course X)
-            self.x = self.cpu_io_value & 0x07
+            self.fine_x_scroll = self.cpu_io_value & 0x07
             self.cpu_io_value ^= (self.cpu_io_value^(self.cpu_io_value>>3)) & 0x001F
         def write_ppu_scroll_1():
             # .yyy..YY YYY..... (fine y, course Y)
@@ -351,27 +383,242 @@ class PPU(object):
         self.cpu_writers[reg_idx<<self.cpu_io_write_state]()
         self.cpu_io_write_state ^= 1
 
-    def cpu_write_oam_dma(self, cpu_mem, cpu_mem_page): # 0x4014
-        pass # TODO: write oam data!
+    def cpu_transfer_oam_via_dma(self, mapper, page_num): # 0x4014
+        # CPU is suspended during the transfer, which will take 513 or 514 cycles after the $4014 write tick.
+        # (1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles.)
+        page = mapper.read_page(page_num)  # TODO: add read_page()
+        i = 0
+        while i < 0x100:
+            self.oam[(self.oam_addr+i)&0xFF] = page[i]
+            i += 1
 
-    def resolve_ppu_addr(self, addr16):
-        return addr16  # TODO: do mirroring, whatever else here, then inline usages and consider removing this function
+    def _init_bus(self):
+        # Address range	Size	Description
+        # $0000-$0FFF	$1000	Pattern table 0
+        # $1000-$1FFF	$1000	Pattern table 1
+        # $2000-$23FF	$0400	Nametable 0
+        # $2400-$27FF	$0400	Nametable 1
+        # $2800-$2BFF	$0400	Nametable 2
+        # $2C00-$2FFF	$0400	Nametable 3
+        # $3000-$3EFF	$0F00	Mirrors of $2000-$2EFF
+        # $3F00-$3F1F	$0020	Palette RAM indexes
+        # $3F20-$3FFF	$00E0	Mirrors of $3F00-$3F1F
 
-    def read(self):
-        return self.mem[self.resolve_ppu_addr(self.ppu_addr)]
+        def read_pattern_tables(addr):
+            return self.chr_mem[addr]
+        def read_nametable_0_0(addr):
+            return self.vram[addr-0x2000+0x0000]
+        def read_nametable_0_1(addr):
+            return self.vram[addr-0x2000+0x0400]
+        def read_nametable_0_2(addr):
+            return self.vram[addr-0x2000+0x0800]
+        def read_nametable_0_3(addr):
+            return self.vram[addr-0x2000+0x0C00]
+        def read_nametable_1_0(addr):
+            return self.vram[addr-0x2400+0x0000]
+        def read_nametable_1_1(addr):
+            return self.vram[addr-0x2400+0x0400]
+        def read_nametable_1_2(addr):
+            return self.vram[addr-0x2400+0x0800]
+        def read_nametable_1_3(addr):
+            return self.vram[addr-0x2400+0x0C00]
+        def read_nametable_2_0(addr):
+            return self.vram[addr-0x2800+0x0000]
+        def read_nametable_2_1(addr):
+            return self.vram[addr-0x2800+0x0400]
+        def read_nametable_2_2(addr):
+            return self.vram[addr-0x2800+0x0800]
+        def read_nametable_2_3(addr):
+            return self.vram[addr-0x2800+0x0C00]
+        def read_nametable_3_0(addr):
+            return self.vram[addr-0x2C00+0x0000]
+        def read_nametable_3_1(addr):
+            return self.vram[addr-0x2C00+0x0400]
+        def read_nametable_3_2(addr):
+            return self.vram[addr-0x2C00+0x0800]
+        def read_nametable_3_3(addr):
+            return self.vram[addr-0x2C00+0x0C00]
+        def read_nametable_0_0_mirror(addr):
+            return self.vram[addr-0x3000+0x0000]
+        def read_nametable_0_1_mirror(addr):
+            return self.vram[addr-0x3000+0x0400]
+        def read_nametable_0_2_mirror(addr):
+            return self.vram[addr-0x3000+0x0800]
+        def read_nametable_0_3_mirror(addr):
+            return self.vram[addr-0x3000+0x0C00]
+        def read_nametable_1_0_mirror(addr):
+            return self.vram[addr-0x3400+0x0000]
+        def read_nametable_1_1_mirror(addr):
+            return self.vram[addr-0x3400+0x0400]
+        def read_nametable_1_2_mirror(addr):
+            return self.vram[addr-0x3400+0x0800]
+        def read_nametable_1_3_mirror(addr):
+            return self.vram[addr-0x3400+0x0C00]
+        def read_nametable_2_0_mirror(addr):
+            return self.vram[addr-0x3800+0x0000]
+        def read_nametable_2_1_mirror(addr):
+            return self.vram[addr-0x3800+0x0400]
+        def read_nametable_2_2_mirror(addr):
+            return self.vram[addr-0x3800+0x0800]
+        def read_nametable_2_3_mirror(addr):
+            return self.vram[addr-0x3800+0x0C00]
+        def read_nametable_3_0_mirror(addr):
+            return self.vram[addr-0x3C00+0x0000]
+        def read_nametable_3_1_mirror(addr):
+            return self.vram[addr-0x3C00+0x0400]
+        def read_nametable_3_2_mirror(addr):
+            return self.vram[addr-0x3C00+0x0800]
+        def read_nametable_3_3_mirror(addr):
+            return self.vram[addr-0x3C00+0x0C00]
+        def read_palette_ram_indexes(addr):
+            idx = (addr-0x3F00) % 0x20  # TODO: implement this
 
-    def write(self):
-        self.mem[self.resolve_ppu_addr(self.ppu_addr)] = self.cpu_io_value & 0xFF
+        # TODO: pick right one based on mirroring for each below
+        read_nametable_0 = read_nametable_0_0
+        read_nametable_1 = read_nametable_1_0
+        read_nametable_2 = read_nametable_2_0
+        read_nametable_3 = read_nametable_3_0
+        read_nametable_0_mirror = read_nametable_0_0_mirror
+        read_nametable_1_mirror = read_nametable_1_0_mirror
+        read_nametable_2_mirror = read_nametable_2_0_mirror
+        read_nametable_3_mirror = read_nametable_3_0_mirror
 
-    def tick(self, t_elapsed):
-        pass
+        self.mem_readers = (
+            [read_pattern_tables]     * (0x1000/0x100) +
+            [read_pattern_tables]     * (0x1000/0x100) +
+            [read_nametable_0]        * (0x0400/0x100) +
+            [read_nametable_1]        * (0x0400/0x100) +
+            [read_nametable_2]        * (0x0400/0x100) +
+            [read_nametable_3]        * (0x0400/0x100) +
+            [read_nametable_0_mirror] * (0x0400/0x100) +
+            [read_nametable_1_mirror] * (0x0400/0x100) +
+            [read_nametable_2_mirror] * (0x0400/0x100) +
+            [read_nametable_3_mirror] * (0x0300/0x100) +
+            [read_palette_ram_indexes]
+        )
+
+    def read_mem(self, laddr):
+        return self.mem[self.resolve_mem_addr(laddr)]
+
+    def write_mem(self, laddr, value):
+        self.mem[self.resolve_mem_addr(laddr)] = value
+
+    def render(self, t_elapsed):
+        pixel_idx = 0
+        screen = array.array('B', (0 for _ in range(256*240)))
+        # background
+        tile_0 = 0x0000 # AABB
+        tile_1 = 0x0000 # AABB
+        attr_0 = 0x00   # aa
+        attr_1 = 0x00   # aa
+        attr_n = 0x00   # AA
+        # sprites
+        primary_oam = self.oam
+        secondary_oam = array.array('B', (0 for _ in range(8*4))) # is this real? 8 sprites x 4 bytes
+        spr_tiles_0 = array.array('B', (0 for _ in range(8))) # 8 pairs of 8-bit shift registers 
+        spr_tiles_1 = array.array('B', (0 for _ in range(8))) # 
+        spr_attrs = array.array('B', (0 for _ in range(8))) # 8 latches - These contain the attribute bytes for up to 8 sprites
+        spr_x_pos = array.array('B', (0 for _ in range(8))) # 8 counters - These contain the X positions for up to 8 sprites.
+
+        def render_pixel():
+            screen[pixel_idx] = ((tile_0>>self.fine_x_scroll)|(tile_1>>self.fine_x_scroll<<1)) & 0x03  # is this actually 8 - fine_x_scroll ?
+            tile_0 >>= 1
+            tile_1 >>= 1
+            pixel_idx += 1
+
+        def render_scanline():
+            # 1 cycle
+            t += 1 # idle cycle
+            # 256 cycles
+            pixel_end = pixel_idx + 256
+            while pixel_idx < pixel_end:
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                render_pixel()
+                attr_0 = attr_n # TODO: fill 0 correctly
+                attr_1 = attr_n # TODO: fill 1 correctly
+                attr_n = 0x00   # TODO: lookup next attr, increment t by 2
+                next_tile_0 = 0x00 # TODO: lookup next tile in map, increment t by 2
+                next_tile_1 = 0x00 # TODO: lookup next tile in map, increment t by 2
+                tile_0 |= next_tile_0 << 8
+                tile_1 |= next_tile_1 << 8
+
+                #if spr_x_pos[0]:
+                #    spr_x_pos[0] -= 1
+                #else:
+                #    pass # active
+                
+            # 64 cycles
+            # fetch tile data for the sprites on the next scanline
+            # 16 cycles
+            # fetch first two tiles for the next scanline
+            # 16 cycles
+            # fetch first two tiles for the next scanline
+            # 2 cycles
+            # fetch bytes here are the same nametable byte that will be fetched at the beginning of the next scanline
+
+        # Visible scanlines 0 - 239
+        line_num = 0
+        while line_num < 240:
+            render_scanline()
+
+        # Post-render scanlines 240 - 260
+        # The PPU makes no memory accesses during these scanlines, so PPU memory can be freely accessed by the program
+        
+        # Scanline 240:
+        # Idle
+
+        # Scanline 241:
+        # The VBlank flag of the PPU is set at tick 1 (the second tick) of scanline 241, where the VBlank NMI also occurs.
+
+        # Scanlines 242 - 260:
+        # TODO: do something?
+
+        # Pre-render scanline (261)
+        # TODO: do it! remember to skip last cycle on odd frames (check self.frame_num)
+
+        self.frame_num += 1
+
+    def build_scanline_funcs(self):
+        def idle():
+            pass
+        def fetch_bg_0_addr_only():
+            pass
+        def fetch_nt():
+            pass
+        def fetch_at():
+            pass
+        def fetch_bg_0():
+            pass
+        def fetch_bg_1():
+            pass
+        def inc_x():
+            pass
+        def inc_xy():
+            pass
+        def reset_x():
+            pass
+        # TODO: this lookup can be easily flattened
+        visible_scanline_funcs = [None] * 340
+        idle_scanline_funcs = [None] * 340
+        vblank_scanline_funcs = [None] * 340
+        pre_render_scanline_funcs = [None] * 340
+        self.scanline_funcs = [visible_scanline_funcs] * 240 + [idle_scanline_funcs] * (262-240)
+        self.scanline_funcs[241] = vblank_scanline_funcs
+        self.scanline_funcs[261] = pre_render_scanline_funcs
+
+    def tick(self):
+        self.scanline_funcs[self.scanline_idx][self.t]()
 
 def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
     pc, s, a, x, y, p = registers or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
 
     # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
-
-    mem = mapper.mem  # for zero page r/w or resolved address *READS* ONLY!
 
     def _do_no_other_things(_):
         return 0xFFFF  # arbitrarily large number of cycles
@@ -379,51 +626,51 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
 
     # Resolve address per mode
 
-    def _resolve_immediate(mem, pc):
+    def _resolve_immediate(mapper, pc):
         return pc + 1
-    def _resolve_zero_page(mem, pc):
-        return mem[pc+1]
-    def _resolve_zero_page_indexed_x(mem, pc):
-        return (mem[pc+1]+x) & 0xFF
-    def _resolve_zero_page_indexed_y(mem, pc):
-        return (mem[pc+1]+y) & 0xFF
-    def _resolve_absolute(mem, pc):
-        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))))
-    def _resolve_absolute_indexed_x(mem, pc):
+    def _resolve_zero_page(mapper, pc):
+        return mapper.read(pc+1)
+    def _resolve_zero_page_indexed_x(mapper, pc):
+        return (mapper.read(pc+1)+x) & 0xFF
+    def _resolve_zero_page_indexed_y(mapper, pc):
+        return (mapper.read(pc+1)+y) & 0xFF
+    def _resolve_absolute(mapper, pc):
+        return (mapper.read(pc+1)|(mapper.read(pc+2)<<8))
+    def _resolve_absolute_indexed_x(mapper, pc):
         nonlocal t
-        addr = mem[pc+1] + x
+        addr = mapper.read(pc+1) + x
         t += addr>>8
-        return mapper.resolve((addr+(mem[pc+2]<<8))&0xFFFF)
-    def _resolve_absolute_indexed_y(mem, pc):
+        return (addr+(mapper.read(pc+2)<<8)) & 0xFFFF
+    def _resolve_absolute_indexed_y(mapper, pc):
         nonlocal t
-        addr = mem[pc+1] + y
+        addr = mapper.read(pc+1) + y
         t += addr>>8
-        return mapper.resolve((addr+(mem[pc+2]<<8))&0xFFFF)
-    def _resolve_absolute_indexed_x_no_extra_cycle(mem, pc):
-        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+x)&0xFFFF)
-    def _resolve_absolute_indexed_y_no_extra_cycle(mem, pc):
-        return mapper.resolve(((mem[pc+1]|(mem[pc+2]<<8))+y)&0xFFFF)
-    def _resolve_indexed_indirect(mem, pc):
-        i = mem[pc+1] + x
-        return mapper.resolve(mem[i&0xFF]|(mem[(i+1)&0xFF]<<8))
-    def _resolve_indirect_indexed(mem, pc):
+        return (addr+(mapper.read(pc+2)<<8)) & 0xFFFF
+    def _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc):
+        return ((mapper.read(pc+1)|(mapper.read(pc+2)<<8))+x) & 0xFFFF
+    def _resolve_absolute_indexed_y_no_extra_cycle(mapper, pc):
+        return ((mapper.read(pc+1)|(mapper.read(pc+2)<<8))+y) & 0xFFFF
+    def _resolve_indexed_indirect(mapper, pc):
+        i = mapper.read(pc+1) + x
+        return mapper.read(i&0xFF)|(mapper.read((i+1)&0xFF)<<8)
+    def _resolve_indirect_indexed(mapper, pc):
         nonlocal t
-        i = mem[pc+1]
-        addr = mem[i] + y
+        i = mapper.read(pc+1)
+        addr = mapper.read(i) + y
         t += addr>>8
-        return mapper.resolve((addr+(mem[(i+1)&0xFF]<<8))&0xFFFF)
-    def _resolve_indirect_indexed_no_extra_cycle(mem, pc):
-        i = mem[pc+1]
-        return mapper.resolve(((mem[i]|(mem[(i+1)&0xFF]<<8))+y)&0xFFFF)
-    def _resolve_indirect(mem, pc):
-        addr = mapper.resolve(mem[pc+1]|(mem[pc+2]<<8))
-        return mapper.resolve(mem[addr]|(mem[(addr&0xFF00)|((addr+1)&0xFF)]<<8))  # NOTE: byte two cannot cross page
-    def _resolve_relative(mem, pc):
+        return (addr+(mapper.read((i+1)&0xFF)<<8)) & 0xFFFF
+    def _resolve_indirect_indexed_no_extra_cycle(mapper, pc):
+        i = mapper.read(pc+1)
+        return ((mapper.read(i)|(mapper.read((i+1)&0xFF)<<8))+y) & 0xFFFF
+    def _resolve_indirect(mapper, pc):
+        addr = mapper.read(pc+1) | (mapper.read(pc+2)<<8)
+        return mapper.read(addr) | (mapper.read((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
+    def _resolve_relative(mapper, pc):
         nonlocal t
-        rel_addr = signed8(mem[pc+1])
+        rel_addr = signed8(mapper.read(pc+1))
         pc += 2
         t += (((pc&0xFF)+rel_addr)>>8) & 1
-        return mapper.resolve(pc+rel_addr)
+        return pc + rel_addr
 
     # Interrupts
 
@@ -432,25 +679,25 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         # as interrupts are the only exception to normal execution
         nonlocal pc
         nonlocal t, s
-        mem[STACK_OFFSET+s] = pc << 8
+        mapper.write(STACK_OFFSET+s, pc<<8)
         s = (s-1) & 0xFF
-        mem[STACK_OFFSET+s] = pc & 0xFF
+        mapper.write(STACK_OFFSET+s, pc&0xFF)
         s = (s-1) & 0xFF
-        mem[STACK_OFFSET+s] = p | U
+        mapper.write(STACK_OFFSET+s, p|U)
         s = (s-1) & 0xFF
         t += 7
         pc = new_pc
 
     def _nmi():
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFA)]|(mem[mapper.resolve(0xFFFB)]<<8)))
+        _trigger_interrupt(mapper.read(0xFFFA)|(mapper.read(0xFFFB)<<8))
 
     def _reset():
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFC)]|(mem[mapper.resolve(0xFFFD)]<<8)))
+        _trigger_interrupt(mapper.read(0xFFFC)|(mapper.read(0xFFFD)<<8))
 
     def _irq():
         if p&I:
             return pc  # interrupt disabled
-        _trigger_interrupt(mapper.resolve(mem[mapper.resolve(0xFFFE)]|(mem[mapper.resolve(0xFFFF)]<<8)))
+        _trigger_interrupt(mapper.read(0xFFFE)|(mapper.read(0xFFFF)<<8))
 
     # Instructions
 
@@ -467,7 +714,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N V Z C
     def _69_adc_immediate(pc):
         nonlocal t, a, p
-        m = mem[_resolve_immediate(mem, pc)]
+        m = mapper.read(_resolve_immediate(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -475,7 +722,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _65_adc_zero_page(pc):
         nonlocal t, a, p
-        m = mem[_resolve_zero_page(mem, pc)]
+        m = mapper.read(_resolve_zero_page(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -483,7 +730,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _75_adc_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        m = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        m = mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -491,7 +738,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _6d_adc_absolute(pc):
         nonlocal t, a, p
-        m = mem[_resolve_absolute(mem, pc)]
+        m = mapper.read(_resolve_absolute(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -499,7 +746,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _7d_adc_absolute_indexed_x(pc):
         nonlocal t, a, p
-        m = mem[_resolve_absolute_indexed_x(mem, pc)]
+        m = mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -507,7 +754,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _79_adc_absolute_indexed_y(pc):
         nonlocal t, a, p
-        m = mem[_resolve_absolute_indexed_y(mem, pc)]
+        m = mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -515,7 +762,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _61_adc_indexed_indirect(pc):
         nonlocal t, a, p
-        m = mem[_resolve_indexed_indirect(mem, pc)]
+        m = mapper.read(_resolve_indexed_indirect(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -523,7 +770,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _71_adc_indirect_indexed(pc):
         nonlocal t, a, p
-        m = mem[_resolve_indirect_indexed(mem, pc)]
+        m = mapper.read(_resolve_indirect_indexed(mapper, pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -534,49 +781,49 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _29_and_immediate(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_immediate(mem, pc)]
+        a &= mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _25_and_zero_page(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_zero_page(mem, pc)]
+        a &= mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _35_and_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        a &= mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _2d_and_absolute(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_absolute(mem, pc)]
+        a &= mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _3d_and_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_absolute_indexed_x(mem, pc)]
+        a &= mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _39_and_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_absolute_indexed_y(mem, pc)]
+        a &= mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _21_and_indexed_indirect(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_indexed_indirect(mem, pc)]
+        a &= mapper.read(_resolve_indexed_indirect(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _31_and_indirect_indexed(pc):
         nonlocal t, a, p
-        a &= mem[_resolve_indirect_indexed(mem, pc)]
+        a &= mapper.read(_resolve_indirect_indexed(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
@@ -592,38 +839,38 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 1
     def _06_asl_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 5
         return pc + 2
     def _16_asl_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 2
     def _0e_asl_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 3
     def _1e_asl_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        m = mapper.read(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 7
         return pc + 3
     
@@ -631,13 +878,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N V Z
     def _24_bit_zero_page(pc):
         nonlocal t, p
-        m = mem[_resolve_zero_page(mem, pc)]
+        m = mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 3
         return pc + 2
     def _2c_bit_absolute(pc):
         nonlocal t, p
-        m = mem[_resolve_absolute(mem, pc)]
+        m = mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 4
         return pc + 3
@@ -651,13 +898,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
     # BMI (Branch on MInus)
     def _30_bmi(pc):
         nonlocal t
         if p & N:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
         else:
             t += 2
             return pc + 2
@@ -669,13 +916,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
     # BVS (Branch on oVerflow Set)
     def _70_bvs(pc):
         nonlocal t
         if p & V:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
         else:
             t += 2
             return pc + 2
@@ -687,13 +934,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
     # BCS (Branch on Carry Set)
     def _b0_bcs(pc):
         nonlocal t
         if p & C:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
         else:
             t += 2
             return pc + 2
@@ -705,13 +952,13 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
     # BEQ (Branch on EQual)
     def _f0_beq(pc):
         nonlocal t
         if p & Z:
             t += 3
-            return _resolve_relative(mem, pc)
+            return _resolve_relative(mapper, pc)
         else:
             t += 2
             return pc + 2
@@ -730,49 +977,49 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z C
     def _c9_cmp_immediate(pc):
         nonlocal t, p
-        r = a - mem[_resolve_immediate(mem, pc)]
+        r = a - mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c5_cmp_zero_page(pc):
         nonlocal t, p
-        r = a - mem[_resolve_zero_page(mem, pc)]
+        r = a - mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _d5_cmp_zero_page_indexed_x(pc):
         nonlocal t, p
-        r = a - mem[_resolve_zero_page_indexed_x(mem, pc)]
+        r = a - mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 2
     def _cd_cmp_absolute(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute(mem, pc)]
+        r = a - mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _dd_cmp_absolute_indexed_x(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute_indexed_x(mem, pc)]
+        r = a - mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _d9_cmp_absolute_indexed_y(pc):
         nonlocal t, p
-        r = a - mem[_resolve_absolute_indexed_y(mem, pc)]
+        r = a - mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     def _c1_cmp_indexed_indirect(pc):
         nonlocal t, p
-        r = a - mem[_resolve_indexed_indirect(mem, pc)]
+        r = a - mapper.read(_resolve_indexed_indirect(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 6
         return pc + 2
     def _d1_cmp_indirect_indexed(pc):
         nonlocal t, p
-        r = a - mem[_resolve_indirect_indexed(mem, pc)]
+        r = a - mapper.read(_resolve_indirect_indexed(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 5
         return pc + 2
@@ -781,19 +1028,19 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z C
     def _e0_cpx_immediate(pc):
         nonlocal t, p
-        r = x - mem[_resolve_immediate(mem, pc)]
+        r = x - mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _e4_cpx_zero_page(pc):
         nonlocal t, p
-        r = x - mem[_resolve_zero_page(mem, pc)]
+        r = x - mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _ec_cpx_absolute(pc):
         nonlocal t, p
-        r = x - mem[_resolve_absolute(mem, pc)]
+        r = x - mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
@@ -802,19 +1049,19 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z C
     def _c0_cpy_immediate(pc):
         nonlocal t, p
-        r = y - mem[_resolve_immediate(mem, pc)]
+        r = y - mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
     def _c4_cpy_zero_page(pc):
         nonlocal t, p
-        r = y - mem[_resolve_zero_page(mem, pc)]
+        r = y - mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
     def _cc_cpy_absolute(pc):
         nonlocal t, p
-        r = y - mem[_resolve_absolute(mem, pc)]
+        r = y - mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
@@ -823,38 +1070,38 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _c6_dec_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 5
         return pc + 2
     def _d6_dec_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 2
     def _ce_dec_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 3
     def _de_dec_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        m = mapper.read(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 7
         return pc + 3
     
@@ -862,49 +1109,49 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _49_eor_immediate(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_immediate(mem, pc)]
+        a ^= mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _45_eor_zero_page(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_zero_page(mem, pc)]
+        a ^= mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _55_eor_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        a ^= mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _4d_eor_absolute(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_absolute(mem, pc)]
+        a ^= mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _5d_eor_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_absolute_indexed_x(mem, pc)]
+        a ^= mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _59_eor_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_absolute_indexed_y(mem, pc)]
+        a ^= mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _41_eor_indexed_indirect(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_indexed_indirect(mem, pc)]
+        a ^= mapper.read(_resolve_indexed_indirect(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _51_eor_indirect_indexed(pc):
         nonlocal t, a, p
-        a ^= mem[_resolve_indirect_indexed(mem, pc)]
+        a ^= mapper.read(_resolve_indirect_indexed(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
@@ -957,38 +1204,38 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _e6_inc_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 5
         return pc + 2
     def _f6_inc_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 2
     def _ee_inc_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 3
     def _fe_inc_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        m = mapper.read(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 7
         return pc + 3
     
@@ -997,21 +1244,21 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _4c_jmp_absolute(pc):
         nonlocal t
         t += 3
-        return _resolve_absolute(mem, pc)
+        return _resolve_absolute(mapper, pc)
     def _6c_jmp_indirect(pc):
         nonlocal t
         t += 5
-        return _resolve_indirect(mem, pc)
+        return _resolve_indirect(mapper, pc)
     
     # JSR (Jump to SubRoutine)
     # Writes flags: none
     def _20_jsr_absolute(pc):
         nonlocal t, s
-        to = _resolve_absolute(mem, pc)
+        to = _resolve_absolute(mapper, pc)
         pc += 2 # 3 - 1 (offset by one before storing on stack)
-        mem[STACK_OFFSET+s] = pc >> 8
+        mapper.write(STACK_OFFSET+s, pc>>8)
         s = (s-1) & 0xFF
-        mem[STACK_OFFSET+s] = pc & 0xFF
+        mapper.write(STACK_OFFSET+s, pc&0xFF)
         s = (s-1) & 0xFF
         t += 6
         return to
@@ -1020,49 +1267,49 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _a9_lda_immediate(pc):
         nonlocal t, a, p
-        a = mem[_resolve_immediate(mem, pc)]
+        a = mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _a5_lda_zero_page(pc):
         nonlocal t, a, p
-        a = mem[_resolve_zero_page(mem, pc)]
+        a = mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _b5_lda_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        a = mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _ad_lda_absolute(pc):
         nonlocal t, a, p
-        a = mem[_resolve_absolute(mem, pc)]
+        a = mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _bd_lda_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a = mem[_resolve_absolute_indexed_x(mem, pc)]
+        a = mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _b9_lda_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a = mem[_resolve_absolute_indexed_y(mem, pc)]
+        a = mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _a1_lda_indexed_indirect(pc):
         nonlocal t, a, p
-        a = mem[_resolve_indexed_indirect(mem, pc)]
+        a = mapper.read(_resolve_indexed_indirect(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _b1_lda_indirect_indexed(pc):
         nonlocal t, a, p
-        a = mem[_resolve_indirect_indexed(mem, pc)]
+        a = mapper.read(_resolve_indirect_indexed(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
@@ -1071,31 +1318,31 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _a2_ldx_immediate(pc):
         nonlocal t, x, p
-        x = mem[_resolve_immediate(mem, pc)]
+        x = mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 2
         return pc + 2
     def _a6_ldx_zero_page(pc):
         nonlocal t, x, p
-        x = mem[_resolve_zero_page(mem, pc)]
+        x = mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 3
         return pc + 2
     def _b6_ldx_zero_page_indexed_y(pc):
         nonlocal t, x, p
-        x = mem[_resolve_zero_page_indexed_y(mem, pc)]
+        x = mapper.read(_resolve_zero_page_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 2
     def _ae_ldx_absolute(pc):
         nonlocal t, x, p
-        x = mem[_resolve_absolute(mem, pc)]
+        x = mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
     def _be_ldx_absolute_indexed_y(pc):
         nonlocal t, x, p
-        x = mem[_resolve_absolute_indexed_y(mem, pc)]
+        x = mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
@@ -1104,31 +1351,31 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _a0_ldy_immediate(pc):
         nonlocal t, y, p
-        y = mem[_resolve_immediate(mem, pc)]
+        y = mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 2
         return pc + 2
     def _a4_ldy_zero_page(pc):
         nonlocal t, y, p
-        y = mem[_resolve_zero_page(mem, pc)]
+        y = mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 3
         return pc + 2
     def _b4_ldy_zero_page_indexed_x(pc):
         nonlocal t, y, p
-        y = mem[_resolve_zero_page_indexed_x(mem, pc)]
+        y = mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 2
     def _ac_ldy_absolute(pc):
         nonlocal t, y, p
-        y = mem[_resolve_absolute(mem, pc)]
+        y = mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
     def _bc_ldy_absolute_indexed_x(pc):
         nonlocal t, y, p
-        y = mem[_resolve_absolute_indexed_x(mem, pc)]
+        y = mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
@@ -1144,38 +1391,38 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 1
     def _46_lsr_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r)
+        mapper.write(addr, r)
         t += 5
         return pc + 2
     def _56_lsr_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r)
+        mapper.write(addr, r)
         t += 6
         return pc + 2
     def _4e_lsr_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r)
+        mapper.write(addr, r)
         t += 6
         return pc + 3
     def _5e_lsr_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        m = mapper.read(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r)
+        mapper.write(addr, r)
         t += 7
         return pc + 3
     
@@ -1190,49 +1437,49 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N Z
     def _09_ora_immediate(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_immediate(mem, pc)]
+        a |= mapper.read(_resolve_immediate(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
     def _05_ora_zero_page(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_zero_page(mem, pc)]
+        a |= mapper.read(_resolve_zero_page(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
     def _15_ora_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_zero_page_indexed_x(mem, pc)]
+        a |= mapper.read(_resolve_zero_page_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
     def _0d_ora_absolute(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_absolute(mem, pc)]
+        a |= mapper.read(_resolve_absolute(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _1d_ora_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_absolute_indexed_x(mem, pc)]
+        a |= mapper.read(_resolve_absolute_indexed_x(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _19_ora_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_absolute_indexed_y(mem, pc)]
+        a |= mapper.read(_resolve_absolute_indexed_y(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
     def _01_ora_indexed_indirect(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_indexed_indirect(mem, pc)]
+        a |= mapper.read(_resolve_indexed_indirect(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
     def _11_ora_indirect_indexed(pc):
         nonlocal t, a, p
-        a |= mem[_resolve_indirect_indexed(mem, pc)]
+        a |= mapper.read(_resolve_indirect_indexed(mapper, pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
@@ -1307,34 +1554,34 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 1
     def _26_rol_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        r = (mem[addr32]<<1) | (p&C)
+        addr = _resolve_zero_page(mapper, pc)
+        r = (mapper.read(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 5
         return pc + 2
     def _36_rol_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        r = (mem[addr32]<<1) | (p&C)
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        r = (mapper.read(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 2
     def _2e_rol_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        r = (mem[addr32]<<1) | (p&C)
+        addr = _resolve_absolute(mapper, pc)
+        r = (mapper.read(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 3
     def _3e_rol_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        r = (mem[addr32]<<1) | (p&C)
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        r = (mapper.read(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 7
         return pc + 3
     
@@ -1349,38 +1596,38 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 1
     def _66_ror_zero_page(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 5
         return pc + 2
     def _76_ror_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 2
     def _6e_ror_absolute(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 6
         return pc + 3
     def _7e_ror_absolute_indexed_x(pc):
         nonlocal t, p
-        addr32 = _resolve_absolute_indexed_x_no_extra_cycle(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
+        m = mapper.read(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.write(addr32, r&0xFF)
+        mapper.write(addr, r&0xFF)
         t += 7
         return pc + 3
     
@@ -1389,11 +1636,11 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _40_rti_implied(pc):
         nonlocal t, p, s
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s] & MASK_B | U
+        p = mapper.read(STACK_OFFSET+s) & MASK_B | U
         s = (s+1) & 0xFF
-        pc = mem[STACK_OFFSET+s]
+        pc = mapper.read(STACK_OFFSET+s)
         s = (s+1) & 0xFF
-        pc |= mem[STACK_OFFSET+s] << 8
+        pc |= mapper.read(STACK_OFFSET+s) << 8
         t += 6
         return pc
     
@@ -1402,9 +1649,9 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _60_rts_implied(pc):
         nonlocal t, s
         s = (s+1) & 0xFF
-        pc = mem[STACK_OFFSET+s]
+        pc = mapper.read(STACK_OFFSET+s)
         s = (s+1) & 0xFF
-        pc |= mem[STACK_OFFSET+s] << 8
+        pc |= mapper.read(STACK_OFFSET+s) << 8
         t += 6
         return pc + 1
     
@@ -1412,7 +1659,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: N V Z C
     def _e9_sbc_immediate(pc):
         nonlocal t, p, a
-        m = mem[_resolve_immediate(mem, pc)]
+        m = mapper.read(_resolve_immediate(mapper, pc))
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1420,8 +1667,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _e5_sbc_zero_page(pc):
         nonlocal t, p, a
-        addr32 = _resolve_zero_page(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1429,8 +1676,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _f5_sbc_zero_page_indexed_x(pc):
         nonlocal t, p, a
-        addr32 = _resolve_zero_page_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_zero_page_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1438,8 +1685,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _ed_sbc_absolute(pc):
         nonlocal t, p, a
-        addr32 = _resolve_absolute(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1447,8 +1694,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _fd_sbc_absolute_indexed_x(pc):
         nonlocal t, p, a
-        addr32 = _resolve_absolute_indexed_x(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_x(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1456,8 +1703,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _f9_sbc_absolute_indexed_y(pc):
         nonlocal t, p, a
-        addr32 = _resolve_absolute_indexed_y(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_absolute_indexed_y(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1465,8 +1712,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 3
     def _e1_sbc_indexed_indirect(pc):
         nonlocal t, p, a
-        addr32 = _resolve_indexed_indirect(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_indexed_indirect(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1474,8 +1721,8 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
         return pc + 2
     def _f1_sbc_indirect_indexed(pc):
         nonlocal t, p, a
-        addr32 = _resolve_indirect_indexed(mem, pc)
-        m = mem[addr32]
+        addr = _resolve_indirect_indexed(mapper, pc)
+        m = mapper.read(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1486,37 +1733,37 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: none
     def _85_sta_zero_page(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page(mem, pc), a)
+        mapper.write(_resolve_zero_page(mapper, pc), a)
         t += 3
         return pc + 2
     def _95_sta_zero_page_indexed_x(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page_indexed_x(mem, pc), a)
+        mapper.write(_resolve_zero_page_indexed_x(mapper, pc), a)
         t += 4
         return pc + 2
     def _8d_sta_absolute(pc):
         nonlocal t
-        mapper.write(_resolve_absolute(mem, pc), a)
+        mapper.write(_resolve_absolute(mapper, pc), a)
         t += 4
         return pc + 3
     def _9d_sta_absolute_indexed_x(pc):
         nonlocal t
-        mapper.write(_resolve_absolute_indexed_x_no_extra_cycle(mem, pc), a)
+        mapper.write(_resolve_absolute_indexed_x_no_extra_cycle(mapper, pc), a)
         t += 5
         return pc + 3
     def _99_sta_absolute_indexed_y(pc):
         nonlocal t
-        mapper.write(_resolve_absolute_indexed_y_no_extra_cycle(mem, pc), a)
+        mapper.write(_resolve_absolute_indexed_y_no_extra_cycle(mapper, pc), a)
         t += 5
         return pc + 3
     def _81_sta_indexed_indirect(pc):
         nonlocal t
-        mapper.write(_resolve_indexed_indirect(mem, pc), a)
+        mapper.write(_resolve_indexed_indirect(mapper, pc), a)
         t += 6
         return pc + 2
     def _91_sta_indirect_indexed(pc):
         nonlocal t
-        mapper.write(_resolve_indirect_indexed_no_extra_cycle(mem, pc), a)
+        mapper.write(_resolve_indirect_indexed_no_extra_cycle(mapper, pc), a)
         t += 6
         return pc + 2
     
@@ -1537,7 +1784,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # PHA (PusH Accumulator)
     def _48_pha(pc):
         nonlocal t, s
-        mem[STACK_OFFSET+s] = a
+        mapper.write(STACK_OFFSET+s, a)
         s = (s-1) & 0xFF
         t += 3
         return pc + 1
@@ -1545,14 +1792,14 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _68_pla(pc):
         nonlocal t, s, a, p
         s = (s+1) & 0xFF
-        a = mem[STACK_OFFSET+s]
+        a = mapper.read(STACK_OFFSET+s)
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 1
     # PHP (PusH Processor status)
     def _08_php(pc):
         nonlocal t, s
-        mem[STACK_OFFSET+s] = p | B | U
+        mapper.write(STACK_OFFSET+s, p|B|U)
         s = (s-1) & 0xFF
         t += 3
         return pc + 1
@@ -1560,7 +1807,7 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     def _28_plp(pc):
         nonlocal t, s, p
         s = (s+1) & 0xFF
-        p = mem[STACK_OFFSET+s] & MASK_B | U  # always clear break bit, set unused bit 
+        p = mapper.read(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
         t += 4
         return pc + 1
     
@@ -1568,17 +1815,17 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: none
     def _86_stx_zero_page(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page(mem, pc), x)
+        mapper.write(_resolve_zero_page(mapper, pc), x)
         t += 3
         return pc + 2
     def _96_stx_zero_page_indexed_y(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page_indexed_y(mem, pc), x)
+        mapper.write(_resolve_zero_page_indexed_y(mapper, pc), x)
         t += 4
         return pc + 2
     def _8e_stx_absolute(pc):
         nonlocal t
-        mapper.write(_resolve_absolute(mem, pc), x)
+        mapper.write(_resolve_absolute(mapper, pc), x)
         t += 4
         return pc + 3
     
@@ -1586,17 +1833,17 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
     # Writes flags: none
     def _84_sty_zero_page(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page(mem, pc), y)
+        mapper.write(_resolve_zero_page(mapper, pc), y)
         t += 3
         return pc + 2
     def _94_sty_zero_page_indexed_x(pc):
         nonlocal t
-        mapper.write(_resolve_zero_page_indexed_x(mem, pc), y)
+        mapper.write(_resolve_zero_page_indexed_x(mapper, pc), y)
         t += 4
         return pc + 2
     def _8c_sty_absolute(pc):
         nonlocal t
-        mapper.write(_resolve_absolute(mem, pc), y)
+        mapper.write(_resolve_absolute(mapper, pc), y)
         t += 4
         return pc + 3
     
@@ -1761,17 +2008,17 @@ def play(mapper, registers=None, t=0, do_other_things=None, stop_on_brk=False, p
             next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
             while t < next_t:  # catch up with external system(s)
                 if print_cpu_log:
-                    op = mem[pc]
+                    op = mapper.read(pc)
                     num_operands = INSTRUCTION_BYTES[op]
-                    operands = [(mem[pc+operand_i] if operand_i < num_operands else None) for operand_i in range(3)]
+                    operands = [(mapper.read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
                     operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
                     addr_mode = INSTRUCTION_ADDR_MODES[op]
                     addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mem, pc, operands)}'
+                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mapper, pc, operands)}'
                     log_line += ' ' * (48-len(log_line))
                     log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                     print(log_line)
-                pc = ops[mem[pc]](pc)
+                pc = ops[mapper.read(pc)](pc)
     except VMStop:
         pass  # clean exit
 
@@ -1783,36 +2030,42 @@ class Cart(object):
         prg_rom_banks,
         chr_rom_banks,
         mapper_cls=None,
+        prg_ram_size=0,
+        chr_ram_size=0,
         trainer=None,
         has_non_volatile_memory=None,
         hard_wired_nametable_mirroring_type=None,
         hard_wired_four_screen_mode=None,
         has_ines_2_0_identifier=None,
         console_type=None,
-        num_ram_banks=None,
         timing_mode=None,
         more_console_type_info=None,
         num_misc_roms=None,
-        default_expansion_device=None
+        default_expansion_device=None,
+        cart_filename=None
     ):
         self.prg_rom_banks = prg_rom_banks
         self.chr_rom_banks = chr_rom_banks
+        self.prg_ram = array.array('B', (0 for _ in range(prg_ram_size)))
+        self.chr_ram = array.array('B', (0 for _ in range(chr_ram_size)))
         self.mapper_cls = mapper_cls or Mapper
         self.trainer = trainer
         self.hard_wired_nametable_mirroring_type = hard_wired_nametable_mirroring_type
-        self.has_non_volatile_memory = has_non_volatile_memory
+        self.has_non_volatile_memory = has_non_volatile_memory  # redundant to prg-nvram once it's adddeds
         self.hard_wired_four_screen_mode = hard_wired_four_screen_mode
         self.has_ines_2_0_identifier = has_ines_2_0_identifier
         self.console_type = console_type
-        self.num_ram_banks = num_ram_banks
+        self.prg_ram_size = prg_ram_size
         self.timing_mode = timing_mode
         self.more_console_type_info = more_console_type_info
         self.num_misc_roms = num_misc_roms
         self.default_expansion_device = default_expansion_device
+        self.cart_filename = cart_filename
         
     @staticmethod
-    def from_ines(ines_file):
+    def from_ines(ines_filepath):
         # See: https://www.nesdev.org/wiki/NES_2.0
+        ines_file = open(ines_filepath, 'rb')
         header = ines_file.read(0x10)
 
         # Extract header bytes upfront, clearing unused bits (for sanity)
@@ -1823,8 +2076,8 @@ class Cart(object):
         control_byte_high        = header[0x7]
         submapper                = header[0x8]
         num_rom_banks_high       = header[0x9]
-        prg_ram_size             = header[0xA]
-        chr_ram_size             = header[0xB]
+        prg_ram_shift            = header[0xA] & 0xF # TODO: PRG-NVRAM
+        chr_ram_shift            = header[0xB] & 0xF # TODO: CHR-NVRAM
         timing_mode              = header[0xC] & 0x3
         more_console_type_info   = header[0xD]
         num_misc_roms            = header[0xE] & 0x3
@@ -1843,7 +2096,8 @@ class Cart(object):
         mapper_num = ((control_byte_low>>4)&0xF) | (control_byte_high&0xF0)
         has_ines_2_0_identifier = bool(((control_byte_high>>2)&3)==0x10)
         console_type = control_byte_high & 3
-        num_ram_banks = prg_ram_size or 1
+        prg_ram_size = 64 << prg_ram_shift
+        chr_ram_size = 64 << chr_ram_shift
 
         # Extract trainer
         if has_trainer:
@@ -1871,17 +2125,19 @@ class Cart(object):
             prg_rom_banks,
             chr_rom_banks,
             mapper_cls=mapper_cls,
+            prg_ram_size=prg_ram_size,
+            chr_ram_size=chr_ram_size,
             trainer=trainer,
             has_non_volatile_memory=has_non_volatile_memory,
             hard_wired_nametable_mirroring_type=hard_wired_nametable_mirroring_type,
             hard_wired_four_screen_mode=hard_wired_four_screen_mode,
             has_ines_2_0_identifier=has_ines_2_0_identifier,
             console_type=console_type,
-            num_ram_banks=num_ram_banks,
             timing_mode=timing_mode,
             more_console_type_info=more_console_type_info,
             num_misc_roms=num_misc_roms,
-            default_expansion_device=default_expansion_device
+            default_expansion_device=default_expansion_device,
+            cart_filename=os.path.basename(ines_filepath)
         )
 
     def print_config(self):
@@ -1898,26 +2154,40 @@ class Cart(object):
         print(f'Memory mapper: {mapper_names[self.mapper_cls.mapper_num]} ({self.mapper_cls.mapper_num})')
         print(f'iNES 2.0 identifier: {self.has_ines_2_0_identifier}')
         print(f'Console type: {console_types[self.console_type]}')
-        print(f'Number of 8 KB RAM banks: {self.num_ram_banks}')
+        print(f'PRG-RAM size: {self.prg_ram_size}')
+        print(f'CHR-RAM size: {self.chr_ram_size}')
         print(f'CPU/PPU Timing: {timing_modes[self.timing_mode]}')
         print(f'More console type info: {self.more_console_type_info}')
         print(f'Number of miscellaneous ROMs: {self.num_misc_roms}')
         print(f'Default expansion device: {self.default_expansion_device}')
 
+    def connect(self, ram, vram, ppu_read, ppu_write):
+        def apu_read(addr):
+            return 0
+        def apu_write(addr, value):
+            pass
+        self.mapper = self.mapper_cls(
+            ram,
+            vram,
+            self.prg_rom_banks,
+            self.prg_ram,
+            self.chr_rom_banks,
+            self.chr_ram,
+            ppu_read,
+            ppu_write,
+            apu_read,
+            apu_write)
+
 class NES(object):
     def __init__(self, cart, registers=None, t=0, print_cpu_log=False):
-        self.ppu = PPU()
         self.cart = cart
         self.registers = registers
         self.t = t
-        self.mem = array.array('B', (0 for _ in range(0x10000)))
-        self.mapper = cart.mapper_cls(self.mem, len(cart.prg_rom_banks), len(cart.chr_rom_banks))
+        self.ram = array.array('B', (0 for _ in range(0x800)))
+        self.vram = array.array('B', (0 for _ in range(0x800)))
+        self.ppu = PPU(self.vram)
+        self.mapper = cart.connect(self.ram, self.vram, self.ppu.cpu_read, self.ppu.cpu_read)
         self.print_cpu_log = print_cpu_log
-        # Append PRG-ROM then CHR-ROM to memory starting at 0x8000
-        for bank_i in range(max(len(cart.prg_rom_banks), 2)):
-            bank = cart.prg_rom_banks[bank_i%len(cart.prg_rom_banks)]
-            for i in range(0x4000):
-                self.mem[ROM_LOWER_BANK_OFFSET+bank_i*0x4000+i] = bank[i]
 
     def play_cart(self):
         self.registers, self.t = play(self.mapper, self.registers, self.t, print_cpu_log=self.print_cpu_log)
@@ -1930,7 +2200,7 @@ if __name__ == "__main__":
     parser.add_argument('--print-cpu-log', action='store_true')
     args = parser.parse_args()
 
-    cart = Cart.from_ines(open(args.rom, 'rb'))
+    cart = Cart.from_ines(args.rom)
 
     if args.print_cart_config:
         cart.print_config()
