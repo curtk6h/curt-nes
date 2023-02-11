@@ -44,24 +44,24 @@ class TestMapper(unittest.TestCase):
     def test_ram_reads(self):
         # $0000-$07FF	$0800	2KB internal RAM
         for i in range(0x0000, 0x0800):
-            self.assertEqual(self.mapper.read(i), i&0xF)
+            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
         # $0800-$0FFF	$0800	Mirrors of $0000-$07FF
         for i in range(0x0800, 0x1000):
-            self.assertEqual(self.mapper.read(i), i&0xF)
+            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
         # $1000-$17FF	$0800
         for i in range(0x1000, 0x1800):
-            self.assertEqual(self.mapper.read(i), i&0xF)
+            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
         # $1800-$1FFF	$0800
         for i in range(0x1800, 0x2000):
-            self.assertEqual(self.mapper.read(i), i&0xF)
+            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
 
     def test_ppu_mappings(self):
         # $2000-$2007	$0008	NES PPU registers
         for i in range(0x2000, 0x2008):
-            self.mapper.read(i)
+            self.mapper.cpu_read(i)
         # $2008-$3FFF	$1FF8	Mirrors of $2000-2007 (repeats every 8 bytes)
         for i in range(0x2008, 0x4000):
-            self.mapper.read(i)
+            self.mapper.cpu_read(i)
         self.assertEqual(
             self.ppu_reads,
             [(i%8) for i in range(0x2000, 0x4000)]
@@ -70,26 +70,26 @@ class TestMapper(unittest.TestCase):
     def test_apu_mappings(self):
         # $4000-$4017	$0018	NES APU and I/O registers
         for i in range(0x4000, 0x4018):
-            self.mapper.read(i)
+            self.mapper.cpu_read(i)
         # $4018-$401F	$0008	APU and I/O functionality that is normally disabled. See CPU Test Mode.
         for i in range(0x4018, 0x4020):
-            self.mapper.read(i)
+            self.mapper.cpu_read(i)
         self.assertEqual(self.apu_reads, list(range(0x0000, 0x0020)))
 
     def test_misc_cart_mappings(self):
         for i in range(0x4020, 0x6000):
-            self.assertEqual(self.mapper.read(i), 0)
+            self.assertEqual(self.mapper.cpu_read(i), 0)
 
     def test_prg_ram_mappings(self):
         for i in range(0x6000, 0x8000):
-            self.assertEqual(self.mapper.read(i), 0x40|((i-0x6000)&0xF))
+            self.assertEqual(self.mapper.cpu_read(i), 0x40|((i-0x6000)&0xF))
 
     def test_rom_one_bank_mappings(self):
         # $4020-$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (See Note)
         for i in range(0x8000, 0xC000):
-            self.assertEqual(self.mapper.read(i), 0x20|((i-0x8000)&0xF))
+            self.assertEqual(self.mapper.cpu_read(i), 0x20|((i-0x8000)&0xF))
         for i in range(0xC000, 0x10000):
-            self.assertEqual(self.mapper.read(i), 0x30|((i-0xC000)&0xF))
+            self.assertEqual(self.mapper.cpu_read(i), 0x30|((i-0xC000)&0xF))
 
 class TestOperations(unittest.TestCase):
     def _build_mapper(self, prg_rom, chr_rom=b'', mapper_cls=Mapper):
@@ -130,7 +130,7 @@ class TestOperations(unittest.TestCase):
             apu_read,
             apu_write)
 
-    def _test_play(self, prg_rom, expected_registers, expected_t, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, ram_patches=[], expected_ram_patches=[], prg_rom_patches=[], expected_prg_rom_patches=[], expected_ppu_reads=[], expected_ppu_writes=[]):
+    def _test_play(self, prg_rom, expected_regs, expected_t, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, ram_patches=[], expected_ram_patches=[], prg_rom_patches=[], expected_prg_rom_patches=[], expected_ppu_reads=[], expected_ppu_writes=[]):
         mapper = self._build_mapper(prg_rom)
 
         # Patch memory before running
@@ -147,9 +147,9 @@ class TestOperations(unittest.TestCase):
         expected_prg_rom = bytearray(b''.join(mapper.prg_rom_banks))
 
         # Run program!
-        registers, t = play(mapper, (pc, s, a, x, y, p), stop_on_brk=True)
+        regs, t = play(mapper, (pc, s, a, x, y, p), stop_on_brk=True)
 
-        self.assertTupleEqual(registers, expected_registers)
+        self.assertTupleEqual(regs, expected_regs)
 
         for start, expected_ram_bytes in expected_ram_patches:
             end = start + len(expected_ram_bytes)
