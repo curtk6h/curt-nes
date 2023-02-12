@@ -1,10 +1,11 @@
 #!/usr/local/bin/python3
 
 # TODO:
-# * fix ppu address mapping
 # * add tests for ppu funcs
 # * connect ppu to cpu/mapper
+# * implement dma
 # * implement rendering
+# * implement palette ram
 # * tick / figure out initialization/syncing w/ cpu
 # * remove unused constants etc
 # * add pygame and draw to screen
@@ -197,23 +198,29 @@ PPUSTATUS_V = 0x80
 PPUSTATUS_S = 0x40
 PPUSTATUS_O = 0x20
 
+NT_MIRRORING_HORIZONTAL = 0
+NT_MIRRORING_VERTICAL = 1
+NT_MIRRORING_SINGLE_SCREEN = 3
+NT_MIRRORING_FOUR_SCREEN = 4
+
 class VMStop(Exception):
     pass
 
 class Mapper(object):
     mapper_num = 0
 
-    def __init__(self, ram, vram, prg_rom_banks, prg_ram, chr_rom, chr_ram, ppu_read, ppu_write, apu_read, apu_write):
-        self.ram = ram
-        self.vram = vram
-        self.prg_rom_banks = prg_rom_banks
+    def __init__(self, ram, vram, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, ppu_read, ppu_write, apu_read, apu_write, nt_mirroring=NT_MIRRORING_VERTICAL):
+        self.ram            = ram
+        self.vram           = vram
+        self.prg_rom_banks  = prg_rom_banks
         self.prg_rom_bank_0 = prg_rom_banks[0]
         self.prg_rom_bank_1 = prg_rom_banks[1]
-        self.prg_ram = prg_ram
-        self.chr_rom = chr_rom
-        self.chr_ram = chr_ram
+        self.prg_ram        = prg_ram
+        self.chr_rom_banks  = chr_rom_banks
+        self.chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
+        self.chr_ram        = chr_ram
         self._init_cpu_io(ppu_read, ppu_write, apu_read, apu_write)
-        self._init_ppu_io()
+        self._init_ppu_io(nt_mirroring)
 
     def cpu_read(self, addr):
         return self.reg_readers[addr](addr)
@@ -226,6 +233,9 @@ class Mapper(object):
 
     def ppu_write(self, addr, value):
         self.ppu_writers[addr](addr, value)
+    
+    def set_nametable_mirroring(self, nt_mirroring):
+        self._init_ppu_io(nt_mirroring)
 
     def _init_cpu_io(self, ppu_read, ppu_write, apu_read, apu_write):
         # Address range	Size	Device
@@ -292,7 +302,7 @@ class Mapper(object):
         )
         assert len(self.reg_writers) == 0x10000
 
-    def _init_ppu_io(self):
+    def _init_ppu_io(self, nt_mirroring):
         # Address range	Size	Description
         # $0000-$0FFF	$1000	Pattern table 0
         # $1000-$1FFF	$1000	Pattern table 1
@@ -304,98 +314,96 @@ class Mapper(object):
         # $3F00-$3F1F	$0020	Palette RAM indexes
         # $3F20-$3FFF	$00E0	Mirrors of $3F00-$3F1F
 
-        def read_pattern_tables(addr):
-            return self.chr_rom[addr]  # TODO: use ram when it's present
-        def read_nametable_0_0(addr):
-            return self.vram[addr-0x2000+0x0000]
-        def read_nametable_0_1(addr):
-            return self.vram[addr-0x2000+0x0400]
-        def read_nametable_0_2(addr):
-            return self.vram[addr-0x2000+0x0800]
-        def read_nametable_0_3(addr):
-            return self.vram[addr-0x2000+0x0C00]
-        def read_nametable_1_0(addr):
-            return self.vram[addr-0x2400+0x0000]
-        def read_nametable_1_1(addr):
-            return self.vram[addr-0x2400+0x0400]
-        def read_nametable_1_2(addr):
-            return self.vram[addr-0x2400+0x0800]
-        def read_nametable_1_3(addr):
-            return self.vram[addr-0x2400+0x0C00]
-        def read_nametable_2_0(addr):
-            return self.vram[addr-0x2800+0x0000]
-        def read_nametable_2_1(addr):
-            return self.vram[addr-0x2800+0x0400]
-        def read_nametable_2_2(addr):
-            return self.vram[addr-0x2800+0x0800]
-        def read_nametable_2_3(addr):
-            return self.vram[addr-0x2800+0x0C00]
-        def read_nametable_3_0(addr):
-            return self.vram[addr-0x2C00+0x0000]
-        def read_nametable_3_1(addr):
-            return self.vram[addr-0x2C00+0x0400]
-        def read_nametable_3_2(addr):
-            return self.vram[addr-0x2C00+0x0800]
-        def read_nametable_3_3(addr):
-            return self.vram[addr-0x2C00+0x0C00]
-        def read_nametable_0_0_mirror(addr):
-            return self.vram[addr-0x3000+0x0000]
-        def read_nametable_0_1_mirror(addr):
-            return self.vram[addr-0x3000+0x0400]
-        def read_nametable_0_2_mirror(addr):
-            return self.vram[addr-0x3000+0x0800]
-        def read_nametable_0_3_mirror(addr):
-            return self.vram[addr-0x3000+0x0C00]
-        def read_nametable_1_0_mirror(addr):
-            return self.vram[addr-0x3400+0x0000]
-        def read_nametable_1_1_mirror(addr):
-            return self.vram[addr-0x3400+0x0400]
-        def read_nametable_1_2_mirror(addr):
-            return self.vram[addr-0x3400+0x0800]
-        def read_nametable_1_3_mirror(addr):
-            return self.vram[addr-0x3400+0x0C00]
-        def read_nametable_2_0_mirror(addr):
-            return self.vram[addr-0x3800+0x0000]
-        def read_nametable_2_1_mirror(addr):
-            return self.vram[addr-0x3800+0x0400]
-        def read_nametable_2_2_mirror(addr):
-            return self.vram[addr-0x3800+0x0800]
-        def read_nametable_2_3_mirror(addr):
-            return self.vram[addr-0x3800+0x0C00]
-        def read_nametable_3_0_mirror(addr):
-            return self.vram[addr-0x3C00+0x0000]
-        def read_nametable_3_1_mirror(addr):
-            return self.vram[addr-0x3C00+0x0400]
-        def read_nametable_3_2_mirror(addr):
-            return self.vram[addr-0x3C00+0x0800]
-        def read_nametable_3_3_mirror(addr):
-            return self.vram[addr-0x3C00+0x0C00]
+        def read_pattern_tables_from_chr_rom(addr):
+            return self.chr_rom_bank[addr]
+        def read_pattern_tables_from_chr_ram(addr):
+            return self.chr_ram[addr]
         def read_palette_ram_indexes(addr):
             idx = (addr-0x3F00) % 0x20  # TODO: implement this
+        def read_nametable_0_0(addr):
+            return self.vram[(addr-0x2000+0x0000)%0x1000]
+        def read_nametable_0_1(addr):
+            return self.vram[(addr-0x2000+0x0400)%0x1000]
+        def read_nametable_0_2(addr):
+            return self.vram[(addr-0x2000+0x0800)%0x1000]
+        def read_nametable_0_3(addr):
+            return self.vram[(addr-0x2000+0x0C00)%0x1000]
+        def read_nametable_1_0(addr):
+            return self.vram[(addr-0x2400+0x0000)%0x1000]
+        def read_nametable_1_1(addr):
+            return self.vram[(addr-0x2400+0x0400)%0x1000]
+        def read_nametable_1_2(addr):
+            return self.vram[(addr-0x2400+0x0800)%0x1000]
+        def read_nametable_1_3(addr):
+            return self.vram[(addr-0x2400+0x0C00)%0x1000]
+        def read_nametable_2_0(addr):
+            return self.vram[(addr-0x2800+0x0000)%0x1000]
+        def read_nametable_2_1(addr):
+            return self.vram[(addr-0x2800+0x0400)%0x1000]
+        def read_nametable_2_2(addr):
+            return self.vram[(addr-0x2800+0x0800)%0x1000]
+        def read_nametable_2_3(addr):
+            return self.vram[(addr-0x2800+0x0C00)%0x1000]
+        def read_nametable_3_0(addr):
+            return self.vram[(addr-0x2C00+0x0000)%0x1000]
+        def read_nametable_3_1(addr):
+            return self.vram[(addr-0x2C00+0x0400)%0x1000]
+        def read_nametable_3_2(addr):
+            return self.vram[(addr-0x2C00+0x0800)%0x1000]
+        def read_nametable_3_3(addr):
+            return self.vram[(addr-0x2C00+0x0C00)%0x1000]
 
-        # TODO: pick right one based on mirroring for each below
-        read_nametable_0 = read_nametable_0_0
-        read_nametable_1 = read_nametable_1_0
-        read_nametable_2 = read_nametable_2_0
-        read_nametable_3 = read_nametable_3_0
-        read_nametable_0_mirror = read_nametable_0_0_mirror
-        read_nametable_1_mirror = read_nametable_1_0_mirror
-        read_nametable_2_mirror = read_nametable_2_0_mirror
-        read_nametable_3_mirror = read_nametable_3_0_mirror
+        if nt_mirroring == NT_MIRRORING_VERTICAL:
+            read_nametable_0 = read_nametable_0_0
+            read_nametable_1 = read_nametable_1_1
+            read_nametable_2 = read_nametable_2_0
+            read_nametable_3 = read_nametable_3_1
+        elif nt_mirroring == NT_MIRRORING_HORIZONTAL:
+            read_nametable_0 = read_nametable_0_0
+            read_nametable_1 = read_nametable_1_0
+            read_nametable_2 = read_nametable_2_2
+            read_nametable_3 = read_nametable_3_2
+        elif nt_mirroring == NT_MIRRORING_SINGLE_SCREEN:
+            read_nametable_0 = read_nametable_0_0
+            read_nametable_1 = read_nametable_1_0
+            read_nametable_2 = read_nametable_2_0
+            read_nametable_3 = read_nametable_3_0
+        elif nt_mirroring == NT_MIRRORING_FOUR_SCREEN:
+            read_nametable_0 = read_nametable_0_0
+            read_nametable_1 = read_nametable_1_1
+            read_nametable_2 = read_nametable_2_2
+            read_nametable_3 = read_nametable_3_3
+        else:
+            raise ValueError(f'Nametable mirroring {nt_mirroring} not supported')
+
+        # Not sure what the default rules for "no mapper" should be (TODO: figure it out!);
+        # this assumes that either one of CHR-ROM or CHR-RAM is present at a time 
+        # and other configurations require a custom mapper
+        if self.chr_ram and self.chr_rom_bank:
+            raise ValueError('CHR-ROM/RAM configuration not supported by default mapper (both are present)')
+
+        if self.chr_ram:
+            read_pattern_table_0 = read_pattern_tables_from_chr_ram
+            read_pattern_table_1 = read_pattern_tables_from_chr_ram
+        else:
+            read_pattern_table_0 = read_pattern_tables_from_chr_rom
+            read_pattern_table_1 = read_pattern_tables_from_chr_rom
 
         self.ppu_readers = (
-            [read_pattern_tables]     * (0x1000//0x100) +
-            [read_pattern_tables]     * (0x1000//0x100) +
-            [read_nametable_0]        * (0x0400//0x100) +
-            [read_nametable_1]        * (0x0400//0x100) +
-            [read_nametable_2]        * (0x0400//0x100) +
-            [read_nametable_3]        * (0x0400//0x100) +
-            [read_nametable_0_mirror] * (0x0400//0x100) +
-            [read_nametable_1_mirror] * (0x0400//0x100) +
-            [read_nametable_2_mirror] * (0x0400//0x100) +
-            [read_nametable_3_mirror] * (0x0300//0x100) +
+            [read_pattern_table_0] * (0x1000//0x100) +
+            [read_pattern_table_1] * (0x1000//0x100) +
+            [read_nametable_0]     * (0x0400//0x100) +
+            [read_nametable_1]     * (0x0400//0x100) +
+            [read_nametable_2]     * (0x0400//0x100) +
+            [read_nametable_3]     * (0x0400//0x100) +
+            [read_nametable_0]     * (0x0400//0x100) +
+            [read_nametable_1]     * (0x0400//0x100) +
+            [read_nametable_2]     * (0x0400//0x100) +
+            [read_nametable_3]     * (0x0300//0x100) +
             [read_palette_ram_indexes]
         )
+        
+        assert(len(self.ppu_readers)==0x4000/0x100)
 
 mappers = {
     mapper.mapper_num: mapper
@@ -419,7 +427,9 @@ class PPU(object):
         self.frame_num = 0
         self.scanline_idx = 0
         self.t = 0
+        self._init_reg_io()
 
+    def _init_reg_io(self):
         def read_nothing():
             pass
         def read_ppu_status():
@@ -430,26 +440,16 @@ class PPU(object):
             self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr]) & 0x00FF
             self.oam_addr = (self.oam_addr+1) & 0xFF
         def read_ppu_data():
-            self.reg_io_value = self.mapper.cpu_read(self.ppu_addr)
+            self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
             self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
-        self.reg_readers = [
-            read_nothing,
-            read_nothing,
-            read_ppu_status,
-            read_nothing,
-            read_oam_data,
-            read_nothing,
-            read_nothing,
-            read_ppu_data
-        ]
 
         def write_nothing():
             pass
         def write_ppu_ctrl():
-            if self.t < 30000:
-                return
+            #if self.t < 30000: # TODO: does this actually need to happen? if so, tests need to accomodate
+            #    return
             if self.ppu_status & self.reg_io_value & ~self.ppu_ctrl & 0x80:
-                pass # TODO: immediately generate an NMI! still set ppuctrl value?
+                raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
             self.ppu_ctrl = self.reg_io_value & 0xFF
         def write_ppu_mask():
             self.ppu_mask = self.reg_io_value & 0xFF
@@ -475,8 +475,19 @@ class PPU(object):
             self.reg_io_value ^= (self.reg_io_value^self.reg_io_value) & 0x00FF
             self.ppu_addr = self.reg_io_value 
         def write_ppu_data():
-            self.write(self.ppu_addr, self.reg_io_value&0xFF)
+            self.mapper.ppu_write(self.ppu_addr, self.reg_io_value&0xFF)
             self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
+
+        self.reg_readers = [
+            read_nothing,
+            read_nothing,
+            read_ppu_status,
+            read_nothing,
+            read_oam_data,
+            read_nothing,
+            read_nothing,
+            read_ppu_data
+        ]
 
         self.reg_writers = [
             # first write
@@ -515,7 +526,7 @@ class PPU(object):
     def transfer_oam_via_dma(self, page_num): # 0x4014
         # CPU is suspended during the transfer, which will take 513 or 514 cycles after the $4014 write tick.
         # (1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles.)
-        page = self.mapper.read_page(page_num)  # TODO: add read_page()
+        page = self.mapper.cpu_read_page(page_num)  # TODO: add cpu_read_page()
         i = 0
         while i < 0x100:
             self.oam[(self.oam_addr+i)&0xFF] = page[i]
@@ -2103,6 +2114,8 @@ class Cart(object):
 
         # Validate file format is iNES
         assert(identification_string == b'NES\x1A')
+        assert((num_rom_banks_high&0xF) != 0xF)    # TODO: handle exponent-multiplier notation
+        assert((num_rom_banks_high&0xF0) != 0xF0)  # TODO: handle exponent-multiplier notation
 
         # Map header bytes to actual full-fledged values
         num_prg_rom_banks = num_prg_rom_banks_low | ((num_rom_banks_high&0xF)<<8)
@@ -2194,7 +2207,11 @@ class Cart(object):
             ppu_read,
             ppu_write,
             apu_read,
-            apu_write)
+            apu_write,
+            [
+                NT_MIRRORING_HORIZONTAL,
+                NT_MIRRORING_VERTICAL
+            ][self.hard_wired_nametable_mirroring_type])
 
 class NES(object):
     def __init__(self, cart, regs=None, t=0, print_cpu_log=False):
@@ -2203,7 +2220,7 @@ class NES(object):
         self.t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x800)))
-        self.ppu = PPU(self.vram)
+        self.ppu = PPU()
         self.mapper = cart.connect(self.ram, self.vram, self.ppu.cpu_read, self.ppu.cpu_read)
         self.print_cpu_log = print_cpu_log
 
