@@ -664,26 +664,49 @@ class TestPPU(unittest.TestCase):
         mapper = self._build_mapper(b'')
         ppu = self._build_ppu(mapper)
         # initial value
-        self.assertEqual(ppu.ppu_ctrl, 0x00) # TODO: !!
+        self.assertEqual(ppu.ppu_ctrl, 0x00)
         # initial write
-        ppu.write_reg(0, 0x02)
-        self.assertEqual(ppu.reg_io_value, 0x02)
-        self.assertEqual(ppu.reg_io_write_state, 1)
-        self.assertEqual(ppu.ppu_ctrl, 0x02)
+        ppu.write_reg(0, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.ppu_ctrl, 0xAA)
         # second write
-        ppu.write_reg(0, 0x01)
-        self.assertEqual(ppu.reg_io_value, 0x01)
+        ppu.write_reg(0, 0x55)
+        self.assertEqual(ppu.reg_io_value, 0x55)
         self.assertEqual(ppu.reg_io_write_state, 0)
-        self.assertEqual(ppu.ppu_ctrl, 0x01)
-        # write all true
-        # write all false
-        # write mixed
-        # mirrors
-
+        self.assertEqual(ppu.ppu_ctrl, 0x55)
+        # write zero
+        ppu.write_reg(0, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.ppu_ctrl, 0x00)
         # read (latch value)
         ppu.reg_io_value = 0x55
         self.assertEqual(ppu.read_reg(0), 0x55)
-        # read after 
+
+    def test_ppumask(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial value
+        self.assertEqual(ppu.ppu_mask, 0x00)
+        # initial write
+        ppu.write_reg(1, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.ppu_mask, 0xAA)
+        # second write
+        ppu.write_reg(1, 0x55)
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.ppu_mask, 0x55)
+        # write zero
+        ppu.write_reg(1, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.ppu_mask, 0x00)
+        # read (latch value)
+        ppu.reg_io_value = 0x55
+        self.assertEqual(ppu.read_reg(1), 0x55)
 
     # def test_ppustatus(self):
     #     # initial read (latch value)

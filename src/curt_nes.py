@@ -520,8 +520,8 @@ class PPU(object):
 
     def write_reg(self, reg_idx, value):
         self.reg_io_value = value
-        self.reg_writers[reg_idx<<self.reg_io_write_state]()
-        self.reg_io_write_state ^= 1
+        self.reg_writers[reg_idx+self.reg_io_write_state]()
+        self.reg_io_write_state ^= 8
 
     def transfer_oam_via_dma(self, page_num): # 0x4014
         # CPU is suspended during the transfer, which will take 513 or 514 cycles after the $4014 write tick.
