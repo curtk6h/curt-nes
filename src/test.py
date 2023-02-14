@@ -683,6 +683,7 @@ class TestPPU(unittest.TestCase):
         # read (latch value)
         ppu.reg_io_value = 0x55
         self.assertEqual(ppu.read_reg(0), 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
 
     def test_ppumask(self):
         mapper = self._build_mapper(b'')
@@ -707,6 +708,26 @@ class TestPPU(unittest.TestCase):
         # read (latch value)
         ppu.reg_io_value = 0x55
         self.assertEqual(ppu.read_reg(1), 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+
+    def test_ppustatus(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial value
+        self.assertEqual(ppu.ppu_status, 0x00)
+        # write attempt
+        ppu.write_reg(2, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.ppu_status, 0x00)
+        # initial read
+        self.assertEqual(ppu.read_reg(2), 0x0A)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        # another read
+        ppu.ppu_status = 0xFF
+        self.assertEqual(ppu.read_reg(2), 0xEA)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.ppu_status, 0x7F)
 
     # def test_ppustatus(self):
     #     # initial read (latch value)

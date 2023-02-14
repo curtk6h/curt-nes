@@ -259,7 +259,7 @@ class Mapper(object):
             [lambda addr: ram[addr-0x1800]] * 0x0800 + # mirror
             # ppu
             [lambda addr: ppu_read((addr-0x2000))] * 8 +
-            [lambda addr: ppu_read((addr-0x2000)%8)] * (0x2000-8) + # mirrors
+            [lambda addr: ppu_read((addr-0x2000)&7)] * (0x2000-8) + # mirrors
             # apu
             [lambda addr: apu_read((addr-0x4000))] * 0x0020 +
             # cart
@@ -291,7 +291,7 @@ class Mapper(object):
             [write_ram_2] * 0x0800 +
             [write_ram_3] * 0x0800 +
             # ppu
-            [lambda addr, value: ppu_write((addr-0x2000)%8, value)] * 0x2000 + # TODO: expand this for mirrors to factor out modulus
+            [lambda addr, value: ppu_write((addr-0x2000)&7, value)] * 0x2000 + # TODO: expand this for mirrors to factor out modulus
             # apu
             [lambda addr, value: apu_write((addr-0x4000), value)] * 0x0020 +
             # cart
@@ -319,39 +319,39 @@ class Mapper(object):
         def read_pattern_tables_from_chr_ram(addr):
             return self.chr_ram[addr]
         def read_palette_ram_indexes(addr):
-            idx = (addr-0x3F00) % 0x20  # TODO: implement this
+            idx = (addr-0x3F00) & 0x1F  # TODO: implement this
         def read_nametable_0_0(addr):
-            return self.vram[(addr-0x2000+0x0000)%0x1000]
+            return self.vram[(addr-(0x2000-0x0000))&0x0FFF]
         def read_nametable_0_1(addr):
-            return self.vram[(addr-0x2000+0x0400)%0x1000]
+            return self.vram[(addr-(0x2000-0x0400))&0x0FFF]
         def read_nametable_0_2(addr):
-            return self.vram[(addr-0x2000+0x0800)%0x1000]
+            return self.vram[(addr-(0x2000-0x0800))&0x0FFF]
         def read_nametable_0_3(addr):
-            return self.vram[(addr-0x2000+0x0C00)%0x1000]
+            return self.vram[(addr-(0x2000-0x0C00))&0x0FFF]
         def read_nametable_1_0(addr):
-            return self.vram[(addr-0x2400+0x0000)%0x1000]
+            return self.vram[(addr-(0x2400-0x0000))&0x0FFF]
         def read_nametable_1_1(addr):
-            return self.vram[(addr-0x2400+0x0400)%0x1000]
+            return self.vram[(addr-(0x2400-0x0400))&0x0FFF]
         def read_nametable_1_2(addr):
-            return self.vram[(addr-0x2400+0x0800)%0x1000]
+            return self.vram[(addr-(0x2400-0x0800))&0x0FFF]
         def read_nametable_1_3(addr):
-            return self.vram[(addr-0x2400+0x0C00)%0x1000]
+            return self.vram[(addr-(0x2400-0x0C00))&0x0FFF]
         def read_nametable_2_0(addr):
-            return self.vram[(addr-0x2800+0x0000)%0x1000]
+            return self.vram[(addr-(0x2800-0x0000))&0x0FFF]
         def read_nametable_2_1(addr):
-            return self.vram[(addr-0x2800+0x0400)%0x1000]
+            return self.vram[(addr-(0x2800-0x0400))&0x0FFF]
         def read_nametable_2_2(addr):
-            return self.vram[(addr-0x2800+0x0800)%0x1000]
+            return self.vram[(addr-(0x2800-0x0800))&0x0FFF]
         def read_nametable_2_3(addr):
-            return self.vram[(addr-0x2800+0x0C00)%0x1000]
+            return self.vram[(addr-(0x2800-0x0C00))&0x0FFF]
         def read_nametable_3_0(addr):
-            return self.vram[(addr-0x2C00+0x0000)%0x1000]
+            return self.vram[(addr-(0x2C00-0x0000))&0x0FFF]
         def read_nametable_3_1(addr):
-            return self.vram[(addr-0x2C00+0x0400)%0x1000]
+            return self.vram[(addr-(0x2C00-0x0400))&0x0FFF]
         def read_nametable_3_2(addr):
-            return self.vram[(addr-0x2C00+0x0800)%0x1000]
+            return self.vram[(addr-(0x2C00-0x0800))&0x0FFF]
         def read_nametable_3_3(addr):
-            return self.vram[(addr-0x2C00+0x0C00)%0x1000]
+            return self.vram[(addr-(0x2C00-0x0C00))&0x0FFF]
 
         if nt_mirroring == NT_MIRRORING_VERTICAL:
             read_nametable_0 = read_nametable_0_0
@@ -435,7 +435,7 @@ class PPU(object):
         def read_ppu_status():
             # ........ VSO.....
             self.reg_io_value ^= (self.reg_io_value^self.ppu_status) & 0x00E0
-            self.ppu_status &= 0xFF6F  # clear vblank after reading
+            self.ppu_status &= 0xFF7F  # clear vblank after reading
         def read_oam_data():
             self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr]) & 0x00FF
             self.oam_addr = (self.oam_addr+1) & 0xFF
