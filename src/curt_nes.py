@@ -390,20 +390,22 @@ class Mapper(object):
             read_pattern_table_1 = read_pattern_tables_from_chr_rom
 
         self.ppu_readers = (
-            [read_pattern_table_0] * (0x1000//0x100) +
-            [read_pattern_table_1] * (0x1000//0x100) +
-            [read_nametable_0]     * (0x0400//0x100) +
-            [read_nametable_1]     * (0x0400//0x100) +
-            [read_nametable_2]     * (0x0400//0x100) +
-            [read_nametable_3]     * (0x0400//0x100) +
-            [read_nametable_0]     * (0x0400//0x100) +
-            [read_nametable_1]     * (0x0400//0x100) +
-            [read_nametable_2]     * (0x0400//0x100) +
-            [read_nametable_3]     * (0x0300//0x100) +
-            [read_palette_ram_indexes]
+            [read_pattern_table_0]     * 0x1000 +
+            [read_pattern_table_1]     * 0x1000 +
+            [read_nametable_0]         * 0x0400 +
+            [read_nametable_1]         * 0x0400 +
+            [read_nametable_2]         * 0x0400 +
+            [read_nametable_3]         * 0x0400 +
+            [read_nametable_0]         * 0x0400 +
+            [read_nametable_1]         * 0x0400 +
+            [read_nametable_2]         * 0x0400 +
+            [read_nametable_3]         * 0x0300 +
+            [read_palette_ram_indexes] * 0x100
         )
         
-        assert(len(self.ppu_readers)==0x4000/0x100)
+        assert(len(self.ppu_readers)==0x4000)
+
+        # TODO: implement writers!!
 
 mappers = {
     mapper.mapper_num: mapper
@@ -424,10 +426,12 @@ class PPU(object):
         self.ppu_addr = 0x0000  # 15 bits
         self.tmp_addr = 0x0000
         self.oam_addr = 0x00
+        self.ppu_data = 0x00 # buffer for last ppudata read
         self.fine_x_scroll = 0x0  # 3 bits
         self.frame_num = 0
         self.scanline_idx = 0
         self.t = 0
+        self.mapper = None  # use setter
         self._init_reg_io()
 
     def _init_reg_io(self):
@@ -438,11 +442,15 @@ class PPU(object):
             self.reg_io_value ^= (self.reg_io_value^self.ppu_status) & 0xE0
             self.ppu_status &= 0x7F  # clear vblank flag
         def read_oam_data():
-            self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr]) & 0x00FF
+            self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr])
             self.oam_addr = (self.oam_addr+1) & 0xFF  # TODO: reads during v/forced blanking do not increment oamaddr
         def read_ppu_data():
-            self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
-            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0xFFFF
+            if self.ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
+                self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
+            else:
+                self.reg_io_value = self.ppu_data
+                self.ppu_data = self.mapper.ppu_read(self.ppu_addr)
+            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0x3FFF
 
         def write_nothing():
             pass
@@ -450,19 +458,19 @@ class PPU(object):
             if self.t < 30000:
                 return  # TODO: figure out reg_io_value / reg_io_write_state
             gen_nmi_immediately = self.ppu_status & self.reg_io_value & ~self.ppu_ctrl & 0x80
-            self.ppu_ctrl = self.reg_io_value & 0xFF
+            self.ppu_ctrl = self.reg_io_value
             # TODO: figure out if this really happens here or on copy to ppu_addr?
             self.tmp_addr ^= (self.tmp_addr ^ (self.reg_io_value<<10)) & 0x0C00
             if gen_nmi_immediately:
                 raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
         def write_ppu_mask():
-            self.ppu_mask = self.reg_io_value & 0xFF
+            self.ppu_mask = self.reg_io_value
         def write_oam_addr():
-            self.oam_addr = self.reg_io_value & 0xFF
+            self.oam_addr = self.reg_io_value
         def write_oam_data():
             # TODO: ignore during rendering
             # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
-            self.oam[self.oam_addr] = self.reg_io_value & 0xFF
+            self.oam[self.oam_addr] = self.reg_io_value
             self.oam_addr = (self.oam_addr + 1) & 0xFF
         def write_ppu_scroll_0():
             # ........ ...XXXXX (course X)
@@ -479,8 +487,8 @@ class PPU(object):
             self.tmp_addr ^= (self.tmp_addr^self.reg_io_value) & 0x00FF
             self.ppu_addr = self.tmp_addr
         def write_ppu_data():
-            self.mapper.ppu_write(self.ppu_addr, self.reg_io_value&0xFF)
-            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0xFFFF
+            self.mapper.ppu_write(self.ppu_addr, self.reg_io_value)
+            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0x3FFF
 
         self.reg_readers = [
             read_nothing,
@@ -520,7 +528,7 @@ class PPU(object):
     def read_reg(self, reg_idx):
         self.reg_readers[reg_idx]()
         self.reg_io_write_state = 0
-        return self.reg_io_value & 0xFF
+        return self.reg_io_value
 
     def write_reg(self, reg_idx, value):
         self.reg_io_value = value
