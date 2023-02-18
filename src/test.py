@@ -663,27 +663,48 @@ class TestPPU(unittest.TestCase):
     def test_ppuctrl(self):
         mapper = self._build_mapper(b'')
         ppu = self._build_ppu(mapper)
-        # initial value
+        # initial write
         self.assertEqual(ppu.ppu_ctrl, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        ppu.write_reg(0, 0xAA)
+        self.assertEqual(ppu.ppu_ctrl, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        self.assertEqual(ppu.reg_io_write_state, 8) # TODO: figure out if this is expected (before 30k cycles no write, does tmp_addr write state change)
+        # after 30000 cycles
+        ppu.t = 30000
+        ppu.reg_io_write_state = 0
         # initial write
         ppu.write_reg(0, 0xAA)
         self.assertEqual(ppu.reg_io_value, 0xAA)
         self.assertEqual(ppu.reg_io_write_state, 8)
         self.assertEqual(ppu.ppu_ctrl, 0xAA)
+        self.assertEqual(ppu.tmp_addr, 0x0800)
         # second write
         ppu.write_reg(0, 0x55)
         self.assertEqual(ppu.reg_io_value, 0x55)
         self.assertEqual(ppu.reg_io_write_state, 0)
         self.assertEqual(ppu.ppu_ctrl, 0x55)
+        self.assertEqual(ppu.tmp_addr, 0x0400)
         # write zero
         ppu.write_reg(0, 0x00)
         self.assertEqual(ppu.reg_io_value, 0x00)
         self.assertEqual(ppu.reg_io_write_state, 8)
         self.assertEqual(ppu.ppu_ctrl, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
         # read (latch value)
         ppu.reg_io_value = 0x55
         self.assertEqual(ppu.read_reg(0), 0x55)
         self.assertEqual(ppu.reg_io_write_state, 0)
+        # flip bit to "generate an NMI", not already on, but not in vblank
+        ppu.write_reg(0, 0x80)
+        self.assertEqual(ppu.ppu_ctrl, 0x80)
+        # flip bit to "generate an NMI", not already on, in vblank
+        ppu.ppu_status = 0x80
+        ppu.ppu_ctrl = 0x00
+        self.assertRaises(ValueError, ppu.write_reg, 0, 0x80)
+        # flip bit to "generate an NMI", already on, in vblank
+        ppu.write_reg(0, 0x80)
+        self.assertEqual(ppu.ppu_ctrl, 0x80)
 
     def test_ppumask(self):
         mapper = self._build_mapper(b'')
@@ -727,16 +748,248 @@ class TestPPU(unittest.TestCase):
         ppu.ppu_status = 0xFF
         self.assertEqual(ppu.read_reg(2), 0xEA)
         self.assertEqual(ppu.reg_io_write_state, 0)
-        self.assertEqual(ppu.ppu_status, 0x7F)
+        self.assertEqual(ppu.ppu_status, 0x7F)  # 7 bit (vblank) is cleared after read
 
-    # def test_ppustatus(self):
-    #     # initial read (latch value)
-    #     self.ppu.read_reg(0x2000)
-    #     # second read
-    #     self.ppu.read_reg(0x2000)
-    #     # mirrors
-    #     # write (fills latch)
-    #     # read after write (unchanged)
+    def test_oamaddr(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial value
+        self.assertEqual(ppu.oam_addr, 0x00)
+        # initial write
+        ppu.write_reg(3, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.oam_addr, 0xAA)
+        # second write
+        ppu.write_reg(3, 0x55)
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.oam_addr, 0x55)
+        # write zero
+        ppu.write_reg(3, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.oam_addr, 0x00)
+        # read (latch value)
+        ppu.reg_io_value = 0x55
+        self.assertEqual(ppu.read_reg(3), 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        # TODO: OAMADDR is set to 0 during each of ticks 257–320 (the sprite tile loading interval)
+        # of the pre-render and visible scanlines
+
+    def test_oamdata(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial values
+        self.assertEqual(ppu.oam_addr, 0x00)
+        # initial write
+        ppu.write_reg(4, 0x55)
+        self.assertEqual(ppu.oam[0x00], 0x55)
+        self.assertEqual(ppu.oam_addr, 0x01)
+        # second write
+        ppu.write_reg(4, 0xAA)
+        self.assertEqual(ppu.oam[0x01], 0xAA)
+        self.assertEqual(ppu.oam_addr, 0x02)
+        # third write, then wrap oamaddr
+        ppu.oam_addr = 0xFF
+        ppu.write_reg(4, 0x55)
+        self.assertEqual(ppu.oam[0xFF], 0x55)
+        self.assertEqual(ppu.oam_addr, 0x00)
+        # reset oamaddr
+        ppu.oam_addr = 0x00
+        # first read
+        self.assertEqual(ppu.read_reg(4), 0x55)
+        self.assertEqual(ppu.oam_addr, 0x01)
+        # second read
+        self.assertEqual(ppu.read_reg(4), 0xAA)
+        self.assertEqual(ppu.oam_addr, 0x02)
+        # third read, then wrap oamaddr
+        ppu.oam_addr = 0xFF
+        self.assertEqual(ppu.read_reg(4), 0x55)
+        self.assertEqual(ppu.oam_addr, 0x00)
+        # TODO: reads during v/forced blanking do not increment oamaddr
+        # TODO: the value of OAMADDR at tick 65 determines the starting address
+        # for sprite evaluation for a visible scanline, which can cause the sprite
+        # at OAMADDR to be treated as it was sprite 0, both for sprite-0 hit and priority.
+        # If OAMADDR is unaligned and does not point to the Y position (first byte)
+        # of an OAM entry, then whatever it points to (tile index, attribute, or X coordinate)
+        # will be reinterpreted as a Y position, and the following bytes will be similarly reinterpreted.
+        # No more sprites will be found once the end of OAM is reached,
+        # effectively hiding any sprites before the starting OAMADDR.
+
+    def test_ppuscroll(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial values
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        # first write
+        ppu.write_reg(5, 0xFF)
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x001F)
+        self.assertEqual(ppu.ppu_addr, 0x0000) # only gets updated during rendering, so always 0x0000 here
+        self.assertEqual(ppu.fine_x_scroll, 0x07)
+        # second write
+        ppu.write_reg(5, 0xFF)
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x73FF)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x07)
+        # write zero, first
+        ppu.tmp_addr = 0xFFFF  # to check that unmasked bits don't change, not that it should ever matter since they aren't used
+        ppu.write_reg(5, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0xFFE0)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # write zero, second
+        ppu.write_reg(5, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x8C00)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        # first write
+        ppu.write_reg(5, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x8C15)
+        self.assertEqual(ppu.ppu_addr, 0x0000) # only gets updated during rendering, so always 0x0000 here
+        self.assertEqual(ppu.fine_x_scroll, 0x02)
+        # read (latch value)
+        self.assertEqual(ppu.read_reg(5), 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+
+    def test_ppuaddr(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial values
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # first write 0xFF
+        ppu.write_reg(6, 0xFF)
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x3F00)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # second write 0xFF
+        ppu.write_reg(6, 0xFF)
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x3FFF)
+        self.assertEqual(ppu.ppu_addr, 0x3FFF)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # first write 0x00
+        ppu.write_reg(6, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x00FF)
+        self.assertEqual(ppu.ppu_addr, 0x3FFF)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # second write 0x00
+        ppu.write_reg(6, 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # first write
+        ppu.write_reg(6, 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x2A00)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # read (latch value)
+        self.assertEqual(ppu.read_reg(6), 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        
+    def test_ppu_scrolling_example_from_wiki(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # full example from wiki, including other regs
+        # initial
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x0000)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # $2000 write
+        # t: ...GH.. ........ <- d: ......GH
+        # <used elsewhere>    <- d: ABCDEF..
+        # =>
+        # t: ...11.. ........ <- d: ......11
+        # <used elsewhere>    <- d: 000000..
+        ppu.t = 30000
+        ppu.write_reg(0, 0x03) # set nametable select = 1 1 = 0x2C00
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x0C00)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # $2002 read
+        # w:                  <- 0
+        ppu.read_reg(2) # reset write state
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x0C00)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        # $2005 first write (w is 0)
+        # t: ....... ...ABCDE <- d: ABCDE...
+        # x:              FGH <- d: .....FGH
+        # w:                  <- 1
+        # =>
+        # t: ....... ...10101 <- d: 10101...
+        # x:              010 <- d: .....010
+        # w:                  <- 1
+        ppu.write_reg(5, 0xAA) # write 
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x0C15)
+        self.assertEqual(ppu.fine_x_scroll, 0x02)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+        # $2005 second write (w is 1)
+        # t: FGH..AB CDE..... <- d: ABCDEFGH
+        # w:                  <- 0
+        # =>
+        # t: 101..01 010..... <- d: 01010101
+        # w:                  <- 0
+        ppu.write_reg(5, 0x55) # write 
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x5D55)
+        self.assertEqual(ppu.fine_x_scroll, 0x02)
+        self.assertEqual(ppu.ppu_addr, 0x0000) # copied during rendering
+        # $2006 first write (w is 0)
+        # t: .CDEFGH ........ <- d: ..CDEFGH
+        #        <unused>     <- d: AB......
+        # t: Z...... ........ <- 0 (bit Z is cleared)
+        # w:                  <- 1
+        # =>
+        # t: .CDEFGH ........ <- d: ..010101
+        #        <unused>     <- d: 01......
+        # t: Z...... ........ <- 0 (bit Z is cleared)
+        ppu.write_reg(6, 0x55) # write 
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.tmp_addr, 0x1555)
+        self.assertEqual(ppu.fine_x_scroll, 0x02)
+        self.assertEqual(ppu.ppu_addr, 0x0000)
+
+        # $2006 second write (w is 1)
+        # t: ....... ABCDEFGH <- d: ABCDEFGH
+        # v: <...all bits...> <- t: <...all bits...>
+        # w:                  <- 0
+        # => 
+        # t: ....... ABCDEFGH <- d: 10101010
+        # v: <...all bits...> <- t: <...all bits...>
+        ppu.write_reg(6, 0xAA) # write 
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.tmp_addr, 0x15AA)
+        self.assertEqual(ppu.fine_x_scroll, 0x02)
+        self.assertEqual(ppu.ppu_addr, 0x15AA)
 
 if __name__ == "__main__":
     unittest.main()

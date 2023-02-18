@@ -416,12 +416,13 @@ def signed8(value):
 class PPU(object):
     def __init__(self):
         self.oam = array.array('B', (0 for _ in range(0x100)))
-        self.reg_io_value = 0x0000
+        self.reg_io_value = 0x00
         self.reg_io_write_state = 0
         self.ppu_status = 0x00
         self.ppu_ctrl = 0x00
         self.ppu_mask = 0x00
         self.ppu_addr = 0x0000  # 15 bits
+        self.tmp_addr = 0x0000
         self.oam_addr = 0x00
         self.fine_x_scroll = 0x0  # 3 bits
         self.frame_num = 0
@@ -433,50 +434,53 @@ class PPU(object):
         def read_nothing():
             pass
         def read_ppu_status():
-            # ........ VSO.....
-            self.reg_io_value ^= (self.reg_io_value^self.ppu_status) & 0x00E0
-            self.ppu_status &= 0xFF7F  # clear vblank after reading
+            # VSO.....
+            self.reg_io_value ^= (self.reg_io_value^self.ppu_status) & 0xE0
+            self.ppu_status &= 0x7F  # clear vblank flag
         def read_oam_data():
             self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr]) & 0x00FF
-            self.oam_addr = (self.oam_addr+1) & 0xFF
+            self.oam_addr = (self.oam_addr+1) & 0xFF  # TODO: reads during v/forced blanking do not increment oamaddr
         def read_ppu_data():
             self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
-            self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
+            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0xFFFF
 
         def write_nothing():
             pass
         def write_ppu_ctrl():
-            #if self.t < 30000: # TODO: does this actually need to happen? if so, tests need to accomodate
-            #    return
-            if self.ppu_status & self.reg_io_value & ~self.ppu_ctrl & 0x80:
-                raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
+            if self.t < 30000:
+                return  # TODO: figure out reg_io_value / reg_io_write_state
+            gen_nmi_immediately = self.ppu_status & self.reg_io_value & ~self.ppu_ctrl & 0x80
             self.ppu_ctrl = self.reg_io_value & 0xFF
+            # TODO: figure out if this really happens here or on copy to ppu_addr?
+            self.tmp_addr ^= (self.tmp_addr ^ (self.reg_io_value<<10)) & 0x0C00
+            if gen_nmi_immediately:
+                raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
         def write_ppu_mask():
             self.ppu_mask = self.reg_io_value & 0xFF
         def write_oam_addr():
             self.oam_addr = self.reg_io_value & 0xFF
         def write_oam_data():
-            # TODO: ignore during rendering?
+            # TODO: ignore during rendering
             # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
             self.oam[self.oam_addr] = self.reg_io_value & 0xFF
             self.oam_addr = (self.oam_addr + 1) & 0xFF
         def write_ppu_scroll_0():
             # ........ ...XXXXX (course X)
             self.fine_x_scroll = self.reg_io_value & 0x07
-            self.reg_io_value ^= (self.reg_io_value^(self.reg_io_value>>3)) & 0x001F
+            self.tmp_addr ^= (self.tmp_addr^(self.reg_io_value>>3)) & 0x001F
         def write_ppu_scroll_1():
             # .yyy..YY YYY..... (fine y, course Y)
-            self.reg_io_value ^= (self.reg_io_value^((self.reg_io_value<<12)|(self.reg_io_value<<5))) & 0x73E0
+            self.tmp_addr ^= (self.tmp_addr^((self.reg_io_value<<12)|(self.reg_io_value<<2))) & 0x73E0
         def write_ppu_addr_0():
-            # .0AAAAAA ........ (address high 6 bits + clear 15th bit)
-            self.reg_io_value ^= (self.reg_io_value^(self.reg_io_value&0x3F00)) & 0x7F00
+            # .0AAAAAA ........ (address high 6 bits + clear 14th bit)
+            self.tmp_addr ^= (self.tmp_addr^((self.reg_io_value&0x3F)<<8)) & 0x7F00
         def write_ppu_addr_1():
             # ........ AAAAAAAA (address low 8 bits)
-            self.reg_io_value ^= (self.reg_io_value^self.reg_io_value) & 0x00FF
-            self.ppu_addr = self.reg_io_value 
+            self.tmp_addr ^= (self.tmp_addr^self.reg_io_value) & 0x00FF
+            self.ppu_addr = self.tmp_addr
         def write_ppu_data():
             self.mapper.ppu_write(self.ppu_addr, self.reg_io_value&0xFF)
-            self.ppu_addr += PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04] # wrap at 0x10000?
+            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0xFFFF
 
         self.reg_readers = [
             read_nothing,
