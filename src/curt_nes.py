@@ -25,6 +25,8 @@
 import array
 import os
 
+DEFAULT_PAL_FILEPATH = 'ntscpalette.pal'  # thanks to https://bisqwit.iki.fi/utils/nespalette.php
+
 # Memory addressing
 ZERO_PAGE_OFFSET         = 0x0000
 STACK_OFFSET             = 0x0100
@@ -209,9 +211,10 @@ class VMStop(Exception):
 class Mapper(object):
     mapper_num = 0
 
-    def __init__(self, ram, vram, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, ppu_read, ppu_write, apu_read, apu_write, nt_mirroring=NT_MIRRORING_VERTICAL):
+    def __init__(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, ppu_read, ppu_write, apu_read, apu_write, nt_mirroring=NT_MIRRORING_VERTICAL):
         self.ram            = ram
         self.vram           = vram
+        self.pals           = pals
         self.prg_rom_banks  = prg_rom_banks
         self.prg_rom_bank_0 = prg_rom_banks[0]
         self.prg_rom_bank_1 = prg_rom_banks[1]
@@ -314,65 +317,120 @@ class Mapper(object):
         # $3F00-$3F1F	$0020	Palette RAM indexes
         # $3F20-$3FFF	$00E0	Mirrors of $3F00-$3F1F
 
-        def read_pattern_tables_from_chr_rom(addr):
+        def r_pattern_tables_from_chr_rom(addr):
             return self.chr_rom_bank[addr]
-        def read_pattern_tables_from_chr_ram(addr):
+        def r_pattern_tables_from_chr_ram(addr):
             return self.chr_ram[addr]
-        def read_palette_ram_indexes(addr):
-            idx = (addr-0x3F00) & 0x1F  # TODO: implement this
-        def read_nametable_0_0(addr):
+        def r_palette_ram_indexes(addr):
+            return self.pals[(addr-(0x3F00))&0x1F]
+        def r_nametable_0_0(addr):
             return self.vram[(addr-(0x2000-0x0000))&0x0FFF]
-        def read_nametable_0_1(addr):
+        def r_nametable_0_1(addr):
             return self.vram[(addr-(0x2000-0x0400))&0x0FFF]
-        def read_nametable_0_2(addr):
+        def r_nametable_0_2(addr):
             return self.vram[(addr-(0x2000-0x0800))&0x0FFF]
-        def read_nametable_0_3(addr):
+        def r_nametable_0_3(addr):
             return self.vram[(addr-(0x2000-0x0C00))&0x0FFF]
-        def read_nametable_1_0(addr):
+        def r_nametable_1_0(addr):
             return self.vram[(addr-(0x2400-0x0000))&0x0FFF]
-        def read_nametable_1_1(addr):
+        def r_nametable_1_1(addr):
             return self.vram[(addr-(0x2400-0x0400))&0x0FFF]
-        def read_nametable_1_2(addr):
+        def r_nametable_1_2(addr):
             return self.vram[(addr-(0x2400-0x0800))&0x0FFF]
-        def read_nametable_1_3(addr):
+        def r_nametable_1_3(addr):
             return self.vram[(addr-(0x2400-0x0C00))&0x0FFF]
-        def read_nametable_2_0(addr):
+        def r_nametable_2_0(addr):
             return self.vram[(addr-(0x2800-0x0000))&0x0FFF]
-        def read_nametable_2_1(addr):
+        def r_nametable_2_1(addr):
             return self.vram[(addr-(0x2800-0x0400))&0x0FFF]
-        def read_nametable_2_2(addr):
+        def r_nametable_2_2(addr):
             return self.vram[(addr-(0x2800-0x0800))&0x0FFF]
-        def read_nametable_2_3(addr):
+        def r_nametable_2_3(addr):
             return self.vram[(addr-(0x2800-0x0C00))&0x0FFF]
-        def read_nametable_3_0(addr):
+        def r_nametable_3_0(addr):
             return self.vram[(addr-(0x2C00-0x0000))&0x0FFF]
-        def read_nametable_3_1(addr):
+        def r_nametable_3_1(addr):
             return self.vram[(addr-(0x2C00-0x0400))&0x0FFF]
-        def read_nametable_3_2(addr):
+        def r_nametable_3_2(addr):
             return self.vram[(addr-(0x2C00-0x0800))&0x0FFF]
-        def read_nametable_3_3(addr):
+        def r_nametable_3_3(addr):
             return self.vram[(addr-(0x2C00-0x0C00))&0x0FFF]
+            
+        def w_pattern_tables_from_chr_rom(addr, value):
+            self.chr_rom_bank[addr] = value
+        def w_pattern_tables_from_chr_ram(addr, value):
+            self.chr_ram[addr] = value
+        def w_palette_ram_indexes(addr, value):
+            self.pals[(addr-(0x3F00))&0x1F] = value
+        def w_nametable_0_0(addr, value):
+            self.vram[(addr-(0x2000-0x0000))&0x0FFF] = value
+        def w_nametable_0_1(addr, value):
+            self.vram[(addr-(0x2000-0x0400))&0x0FFF] = value
+        def w_nametable_0_2(addr, value):
+            self.vram[(addr-(0x2000-0x0800))&0x0FFF] = value
+        def w_nametable_0_3(addr, value):
+            self.vram[(addr-(0x2000-0x0C00))&0x0FFF] = value
+        def w_nametable_1_0(addr, value):
+            self.vram[(addr-(0x2400-0x0000))&0x0FFF] = value
+        def w_nametable_1_1(addr, value):
+            self.vram[(addr-(0x2400-0x0400))&0x0FFF] = value
+        def w_nametable_1_2(addr, value):
+            self.vram[(addr-(0x2400-0x0800))&0x0FFF] = value
+        def w_nametable_1_3(addr, value):
+            self.vram[(addr-(0x2400-0x0C00))&0x0FFF] = value
+        def w_nametable_2_0(addr, value):
+            self.vram[(addr-(0x2800-0x0000))&0x0FFF] = value
+        def w_nametable_2_1(addr, value):
+            self.vram[(addr-(0x2800-0x0400))&0x0FFF] = value
+        def w_nametable_2_2(addr, value):
+            self.vram[(addr-(0x2800-0x0800))&0x0FFF] = value
+        def w_nametable_2_3(addr, value):
+            self.vram[(addr-(0x2800-0x0C00))&0x0FFF] = value
+        def w_nametable_3_0(addr, value):
+            self.vram[(addr-(0x2C00-0x0000))&0x0FFF] = value
+        def w_nametable_3_1(addr, value):
+            self.vram[(addr-(0x2C00-0x0400))&0x0FFF] = value
+        def w_nametable_3_2(addr, value):
+            self.vram[(addr-(0x2C00-0x0800))&0x0FFF] = value
+        def w_nametable_3_3(addr, value):
+            self.vram[(addr-(0x2C00-0x0C00))&0x0FFF] = value
 
         if nt_mirroring == NT_MIRRORING_VERTICAL:
-            read_nametable_0 = read_nametable_0_0
-            read_nametable_1 = read_nametable_1_1
-            read_nametable_2 = read_nametable_2_0
-            read_nametable_3 = read_nametable_3_1
+            r_nametable_0 = r_nametable_0_0
+            r_nametable_1 = r_nametable_1_1
+            r_nametable_2 = r_nametable_2_0
+            r_nametable_3 = r_nametable_3_1
+            w_nametable_0 = w_nametable_0_0
+            w_nametable_1 = w_nametable_1_1
+            w_nametable_2 = w_nametable_2_0
+            w_nametable_3 = w_nametable_3_1
         elif nt_mirroring == NT_MIRRORING_HORIZONTAL:
-            read_nametable_0 = read_nametable_0_0
-            read_nametable_1 = read_nametable_1_0
-            read_nametable_2 = read_nametable_2_2
-            read_nametable_3 = read_nametable_3_2
+            r_nametable_0 = r_nametable_0_0
+            r_nametable_1 = r_nametable_1_0
+            r_nametable_2 = r_nametable_2_2
+            r_nametable_3 = r_nametable_3_2
+            w_nametable_0 = w_nametable_0_0
+            w_nametable_1 = w_nametable_1_0
+            w_nametable_2 = w_nametable_2_2
+            w_nametable_3 = w_nametable_3_2
         elif nt_mirroring == NT_MIRRORING_SINGLE_SCREEN:
-            read_nametable_0 = read_nametable_0_0
-            read_nametable_1 = read_nametable_1_0
-            read_nametable_2 = read_nametable_2_0
-            read_nametable_3 = read_nametable_3_0
+            r_nametable_0 = r_nametable_0_0
+            r_nametable_1 = r_nametable_1_0
+            r_nametable_2 = r_nametable_2_0
+            r_nametable_3 = r_nametable_3_0
+            w_nametable_0 = w_nametable_0_0
+            w_nametable_1 = w_nametable_1_0
+            w_nametable_2 = w_nametable_2_0
+            w_nametable_3 = w_nametable_3_0
         elif nt_mirroring == NT_MIRRORING_FOUR_SCREEN:
-            read_nametable_0 = read_nametable_0_0
-            read_nametable_1 = read_nametable_1_1
-            read_nametable_2 = read_nametable_2_2
-            read_nametable_3 = read_nametable_3_3
+            r_nametable_0 = r_nametable_0_0
+            r_nametable_1 = r_nametable_1_1
+            r_nametable_2 = r_nametable_2_2
+            r_nametable_3 = r_nametable_3_3
+            w_nametable_0 = w_nametable_0_0
+            w_nametable_1 = w_nametable_1_1
+            w_nametable_2 = w_nametable_2_2
+            w_nametable_3 = w_nametable_3_3
         else:
             raise ValueError(f'Nametable mirroring {nt_mirroring} not supported')
 
@@ -383,29 +441,46 @@ class Mapper(object):
             raise ValueError('CHR-ROM/RAM configuration not supported by default mapper (both are present)')
 
         if self.chr_ram:
-            read_pattern_table_0 = read_pattern_tables_from_chr_ram
-            read_pattern_table_1 = read_pattern_tables_from_chr_ram
+            r_pattern_table_0 = r_pattern_tables_from_chr_ram
+            r_pattern_table_1 = r_pattern_tables_from_chr_ram
+            w_pattern_table_0 = w_pattern_tables_from_chr_ram
+            w_pattern_table_1 = w_pattern_tables_from_chr_ram
         else:
-            read_pattern_table_0 = read_pattern_tables_from_chr_rom
-            read_pattern_table_1 = read_pattern_tables_from_chr_rom
+            r_pattern_table_0 = r_pattern_tables_from_chr_rom
+            r_pattern_table_1 = r_pattern_tables_from_chr_rom
+            w_pattern_table_0 = w_pattern_tables_from_chr_rom
+            w_pattern_table_1 = w_pattern_tables_from_chr_rom
 
         self.ppu_readers = (
-            [read_pattern_table_0]     * 0x1000 +
-            [read_pattern_table_1]     * 0x1000 +
-            [read_nametable_0]         * 0x0400 +
-            [read_nametable_1]         * 0x0400 +
-            [read_nametable_2]         * 0x0400 +
-            [read_nametable_3]         * 0x0400 +
-            [read_nametable_0]         * 0x0400 +
-            [read_nametable_1]         * 0x0400 +
-            [read_nametable_2]         * 0x0400 +
-            [read_nametable_3]         * 0x0300 +
-            [read_palette_ram_indexes] * 0x100
+            [r_pattern_table_0]      * 0x1000 +
+            [r_pattern_table_1]      * 0x1000 +
+            [r_nametable_0]          * 0x0400 +
+            [r_nametable_1]          * 0x0400 +
+            [r_nametable_2]          * 0x0400 +
+            [r_nametable_3]          * 0x0400 +
+            [r_nametable_0]          * 0x0400 +
+            [r_nametable_1]          * 0x0400 +
+            [r_nametable_2]          * 0x0400 +
+            [r_nametable_3]          * 0x0300 +
+            [r_palette_ram_indexes]  * 0x100
         )
-        
-        assert(len(self.ppu_readers)==0x4000)
 
-        # TODO: implement writers!!
+        self.ppu_writers = (
+            [w_pattern_table_0]      * 0x1000 +
+            [w_pattern_table_1]      * 0x1000 +
+            [w_nametable_0]          * 0x0400 +
+            [w_nametable_1]          * 0x0400 +
+            [w_nametable_2]          * 0x0400 +
+            [w_nametable_3]          * 0x0400 +
+            [w_nametable_0]          * 0x0400 +
+            [w_nametable_1]          * 0x0400 +
+            [w_nametable_2]          * 0x0400 +
+            [w_nametable_3]          * 0x0300 +
+            [w_palette_ram_indexes]  * 0x100
+        )
+
+        assert(len(self.ppu_readers)==0x4000)
+        assert(len(self.ppu_writers)==0x4000)
 
 mappers = {
     mapper.mapper_num: mapper
@@ -416,7 +491,7 @@ def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
 class PPU(object):
-    def __init__(self):
+    def __init__(self, pal_filepath=None):
         self.oam = array.array('B', (0 for _ in range(0x100)))
         self.reg_io_value = 0x00
         self.reg_io_write_state = 0
@@ -432,7 +507,15 @@ class PPU(object):
         self.scanline_idx = 0
         self.t = 0
         self.mapper = None  # use setter
+        self.pals = array.array('B', (0 for _ in range(0x20)))
+        self.rgbs = PPU._load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
         self._init_reg_io()
+
+    @staticmethod
+    def _load_pal_from_file(pal_filepath):
+        with open(pal_filepath, 'rb') as pal_file:
+            pal_bytes = pal_file.read()
+            return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
 
     def _init_reg_io(self):
         def read_nothing():
@@ -447,6 +530,7 @@ class PPU(object):
         def read_ppu_data():
             if self.ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
                 self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
+                self.ppu_data = self.mapper.ppu_read(self.ppu_addr-0x1000) # TODO: move to mapper?
             else:
                 self.reg_io_value = self.ppu_data
                 self.ppu_data = self.mapper.ppu_read(self.ppu_addr)
@@ -2204,7 +2288,7 @@ class Cart(object):
         print(f'Number of miscellaneous ROMs: {self.num_misc_roms}')
         print(f'Default expansion device: {self.default_expansion_device}')
 
-    def connect(self, ram, vram, ppu_read, ppu_write):
+    def connect(self, ram, vram, pals, ppu_read, ppu_write):
         def apu_read(addr):
             return 0
         def apu_write(addr, value):
@@ -2212,6 +2296,7 @@ class Cart(object):
         self.mapper = self.mapper_cls(
             ram,
             vram,
+            pals,
             self.prg_rom_banks,
             self.prg_ram,
             self.chr_rom_banks,
@@ -2226,14 +2311,19 @@ class Cart(object):
             ][self.hard_wired_nametable_mirroring_type])
 
 class NES(object):
-    def __init__(self, cart, regs=None, t=0, print_cpu_log=False):
+    def __init__(self, cart, regs=None, t=0, print_cpu_log=False, pal_filepath=None):
         self.cart = cart
         self.regs = regs
         self.t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x800)))
-        self.ppu = PPU()
-        self.mapper = cart.connect(self.ram, self.vram, self.ppu.cpu_read, self.ppu.cpu_read)
+        self.ppu = PPU(pal_filepath=pal_filepath)
+        self.mapper = cart.connect(
+            self.ram,
+            self.vram,
+            self.ppu.pals,
+            self.ppu.cpu_read,
+            self.ppu.cpu_read)
         self.print_cpu_log = print_cpu_log
 
     def play_cart(self):
@@ -2245,6 +2335,7 @@ if __name__ == "__main__":
     parser.add_argument('rom')
     parser.add_argument('--print-cart-config', action='store_true')
     parser.add_argument('--print-cpu-log', action='store_true')
+    parser.add_argument('--pal')
     args = parser.parse_args()
 
     cart = Cart.from_ines(args.rom)
@@ -2254,5 +2345,5 @@ if __name__ == "__main__":
         exit(0)
 
     # Currently overriding registers, time for nestest.nes!
-    nes = NES(cart, regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log)
+    nes = NES(cart, regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log, pal_filepath=args.pal)
     nes.play_cart()

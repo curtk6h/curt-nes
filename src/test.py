@@ -13,6 +13,7 @@ class TestMapper(unittest.TestCase):
     sample_prg_ram = array.array('B', (0x40|(i&0xF) for i in range(0x2000)))
     sample_chr_rom = array.array('B', (0x50|(i&0xF) for i in range(0x2000)))
     sample_chr_ram = array.array('B', (0x60|(i&0xF) for i in range(0x2000)))
+    sample_pals = array.array('B', (i&0xF for i in range(0x20)))
 
     def setUp(self):
         self.ppu_reads  = ppu_reads  = []
@@ -32,6 +33,7 @@ class TestMapper(unittest.TestCase):
         self.mapper = Mapper(
             self.sample_ram,
             self.sample_vram,
+            sample_pals,
             self.sample_prg_rom_banks,
             self.sample_prg_ram,
             self.sample_chr_rom,
@@ -113,6 +115,7 @@ class TestCPU(unittest.TestCase):
         ]
         chr_rom_banks = chr_rom and [chr_rom]
         chr_ram = None
+        pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
             prg_rom_banks[0][i] = value
         def ppu_read(addr):
@@ -128,6 +131,7 @@ class TestCPU(unittest.TestCase):
         return mapper_cls(
             ram,
             vram,
+            pals,
             prg_rom_banks,
             prg_ram,
             chr_rom_banks,
@@ -631,6 +635,7 @@ class TestPPU(unittest.TestCase):
         ]
         chr_rom_banks = []
         chr_ram = b''
+        pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
             prg_rom_banks[0][i] = value
         def ppu_read(addr):
@@ -646,6 +651,7 @@ class TestPPU(unittest.TestCase):
         return mapper_cls(
             ram,
             vram,
+            pals,
             prg_rom_banks,
             prg_ram,
             chr_rom_banks,
@@ -909,7 +915,98 @@ class TestPPU(unittest.TestCase):
         # read (latch value)
         self.assertEqual(ppu.read_reg(6), 0xAA)
         self.assertEqual(ppu.reg_io_write_state, 0)
-        
+   
+    def test_ppudata(self):
+        mapper = self._build_mapper(b'')
+        ppu = self._build_ppu(mapper)
+        # initial values
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        ppu.tmp_addr   = 0x2000
+        ppu.ppu_addr   = 0x2000
+        ppu.ppu_data   = 0x00
+        mapper.vram[0x0000] = 0x00
+        mapper.vram[0x0001] = 0xAA
+        mapper.vram[0x0002] = 0xAA
+        mapper.vram[0x0700] = 0x88
+        mapper.pals[0x0000] = 0x77
+        # write
+        ppu.write_reg(7, 0xFF)
+        self.assertEqual(tuple(mapper.vram[0:3]), (0xFF, 0xAA, 0xAA))
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2001)
+        # second write
+        ppu.write_reg(7, 0x55)
+        self.assertEqual(tuple(mapper.vram[0:3]), (0xFF, 0x55, 0xAA))
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2002)
+        # third write, after changing increment to 32
+        ppu.ppu_ctrl |= 0x04 # set increment
+        ppu.write_reg(7, 0xAA)
+        self.assertEqual(tuple(mapper.vram[0:3]), (0xFF, 0x55, 0xAA))
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 8)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2022)
+        ppu.ppu_ctrl ^= 0x04 # reset increment
+        # read buffer garbage
+        ppu.ppu_addr = 0x2001 # backup one
+        self.assertEqual(ppu.read_reg(7), 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2002)
+        # read 0x2001
+        self.assertEqual(ppu.read_reg(7), 0x55)
+        self.assertEqual(ppu.reg_io_value, 0x55)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2003)
+        # read 0x2002
+        self.assertEqual(ppu.read_reg(7), 0xAA)
+        self.assertEqual(ppu.reg_io_value, 0xAA)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x2004)
+        # read mirror 0x3000
+        ppu.ppu_data = 0x00
+        ppu.ppu_addr = 0x3000 # jump to mirrors
+        self.assertEqual(ppu.read_reg(7), 0x00)
+        self.assertEqual(ppu.reg_io_value, 0x00)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x3001)
+        self.assertEqual(ppu.ppu_data, 0xFF)
+        # read mirror 0x3001
+        self.assertEqual(ppu.read_reg(7), 0xFF)
+        self.assertEqual(ppu.reg_io_value, 0xFF)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x3002)
+        self.assertEqual(ppu.ppu_data, 0x55)
+        # read directly from pal
+        ppu.ppu_addr = 0x3F00 # jump to pal
+        self.assertEqual(ppu.read_reg(7), 0x77)
+        self.assertEqual(ppu.reg_io_value, 0x77)
+        self.assertEqual(ppu.reg_io_write_state, 0)
+        self.assertEqual(ppu.fine_x_scroll, 0x00)
+        self.assertEqual(ppu.tmp_addr, 0x2000)
+        self.assertEqual(ppu.ppu_addr, 0x3F01)
+        self.assertEqual(ppu.ppu_data, 0x88) # nametable value mirrored "under" the palette
+     
     def test_ppu_scrolling_example_from_wiki(self):
         mapper = self._build_mapper(b'')
         ppu = self._build_ppu(mapper)
