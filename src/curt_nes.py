@@ -1,11 +1,11 @@
 #!/usr/local/bin/python3
 
+# NOTE: closures are used heavily vs conventional/Pythonic object-oriented ways,
+#       to improve performance; from a sloppy benchmark, using local vars in a 
+#       closure appeared to be nearly twice as fast as using class attributes
+
 # TODO:
-# * add tests for ppu funcs
-# * connect ppu to cpu/mapper
-# * implement dma
 # * implement rendering
-# * implement palette ram
 # * tick / figure out initialization/syncing w/ cpu
 # * remove unused constants etc
 # * add pygame and draw to screen
@@ -226,10 +226,10 @@ class Mapper(object):
         self._init_ppu_io(nt_mirroring)
 
     def cpu_read(self, addr):
-        return self.reg_readers[addr](addr)
+        return self.cpu_readers[addr](addr)
 
     def cpu_write(self, addr, value):
-        self.reg_writers[addr](addr, value)
+        self.cpu_writers[addr](addr, value)
 
     def ppu_read(self, addr):
         return self.ppu_readers[addr](addr)
@@ -252,9 +252,38 @@ class Mapper(object):
         # $4018–$401F	$0008	APU and I/O functionality that is normally disabled. See CPU Test Mode.
         # $4020–$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (see note)
 
+        def write_ram_0(addr, value):
+            ram[addr] = value
+        def write_ram_1(addr, value):
+            ram[addr-0x0800] = value
+        def write_ram_2(addr, value):
+            ram[addr-0x1000] = value
+        def write_ram_3(addr, value):
+            ram[addr-0x1800] = value
+        def write_prg_ram(addr, value):
+            prg_ram[addr-0x6000] = value
+        def write_prg_rom_bank_0(addr, value):
+            pass # self.prg_rom_bank_0[addr-0x8000] = value
+        def write_prg_rom_bank_1(addr, value):
+            pass # self.prg_rom_bank_1[addr-0xC000] = value
+        def write_oamdma(_, from_page):
+            # TODO:
+            # 1. make cpu class and reconcile method names, etc
+            # 2. move this to cpu.cpu_transfer_page_to_oam, add cycles to CPU time totalling 513 or 514
+            # 3. finish connecting  
+            # 4. re-enable below
+            # (1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles.)
+            write_oam = None # TODO: set on cpu from ppu or mapper
+            from_addr = from_page << 8
+            read_cpu_page_byte = self.readers[from_addr]
+            i = 0
+            while i < 0x100:
+                write_oam(read_cpu_page_byte(from_addr+i))
+                i += 1
+
         ram = self.ram
         prg_ram = self.prg_ram
-        self.reg_readers = (
+        self.cpu_readers = (
             # ram
             [lambda addr: ram[addr]] * 0x0800 +
             [lambda addr: ram[addr-0x0800]] * 0x0800 + # mirror
@@ -271,30 +300,15 @@ class Mapper(object):
             [lambda addr: self.prg_rom_bank_0[addr-0x8000]] * 0x4000 + # prg rom bank 0
             [lambda addr: self.prg_rom_bank_1[addr-0xC000]] * 0x4000   # prg rom bank 1
         )
-        assert len(self.reg_readers) == 0x10000
 
-        def write_ram_0(addr, value):
-            ram[addr] = value
-        def write_ram_1(addr, value):
-            ram[addr-0x0800] = value
-        def write_ram_2(addr, value):
-            ram[addr-0x1000] = value
-        def write_ram_3(addr, value):
-            ram[addr-0x1800] = value
-        def write_prg_ram(addr, value):
-            prg_ram[addr-0x6000] = value
-        def write_prg_rom_bank_0(addr, value):
-            pass # self.prg_rom_bank_0[addr-0x8000] = value
-        def write_prg_rom_bank_1(addr, value):
-            pass # self.prg_rom_bank_1[addr-0xC000] = value
-        self.reg_writers = (
+        self.cpu_writers = (
             # ram
             [write_ram_0] * 0x0800 +
             [write_ram_1] * 0x0800 +
             [write_ram_2] * 0x0800 +
             [write_ram_3] * 0x0800 +
             # ppu
-            [lambda addr, value: ppu_write((addr-0x2000)&7, value)] * 0x2000 + # TODO: expand this for mirrors to factor out modulus
+            [lambda addr, value: ppu_write((addr-0x2000)&7, value)] * 0x2000 +
             # apu
             [lambda addr, value: apu_write((addr-0x4000), value)] * 0x0020 +
             # cart
@@ -303,7 +317,11 @@ class Mapper(object):
             [write_prg_rom_bank_0] * 0x4000 + # prg rom bank 0
             [write_prg_rom_bank_1] * 0x4000   # prg rom bank 1
         )
-        assert len(self.reg_writers) == 0x10000
+        
+        self.cpu_writers[0x4014] = lambda addr, value: None # write_oamdma # TODO: re-enable this
+
+        assert len(self.cpu_readers) == 0x10000
+        assert len(self.cpu_writers) == 0x10000
 
     def _init_ppu_io(self, nt_mirroring):
         # Address range	Size	Description
@@ -512,7 +530,7 @@ class PPU(object):
         self._init_reg_io()
 
     @staticmethod
-    def _load_pal_from_file(pal_filepath):
+    def load_pal_from_file(pal_filepath):
         with open(pal_filepath, 'rb') as pal_file:
             pal_bytes = pal_file.read()
             return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
@@ -619,14 +637,9 @@ class PPU(object):
         self.reg_writers[reg_idx+self.reg_io_write_state]()
         self.reg_io_write_state ^= 8
 
-    def transfer_oam_via_dma(self, page_num): # 0x4014
-        # CPU is suspended during the transfer, which will take 513 or 514 cycles after the $4014 write tick.
-        # (1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles.)
-        page = self.mapper.cpu_read_page(page_num)  # TODO: add cpu_read_page()
-        i = 0
-        while i < 0x100:
-            self.oam[(self.oam_addr+i)&0xFF] = page[i]
-            i += 1
+    def write_oam(self, value):
+        self.oam[self.oam_addr&0xFF] = value
+        self.oam_addr += 1
 
     def render(self, t_elapsed):
         pixel_idx = 0
@@ -740,162 +753,133 @@ class PPU(object):
     def tick(self):
         self.scanline_funcs[self.scanline_idx][self.t]()
 
-def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
+def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
+    """
+    The CPU is represented as a tuple of functions:
+    (
+        tick,
+        trigger_nmi,
+        trigger_reset,
+        trigger_irq,
+        inspect_registers
+    )
+    """
+
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
-
+    
     # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
-
-    def _do_no_other_things(_):
-        return 0xFFFF  # arbitrarily large number of cycles
-    do_other_things = do_other_things or _do_no_other_things
-
+    
     # Resolve address per mode
 
-    def _resolve_immediate(mapper, pc):
+    def resolve_immediate(pc):
         return pc + 1
-    def _resolve_zero_page(mapper, pc):
-        return mapper.cpu_read(pc+1)
-    def _resolve_zero_page_indexed_x(mapper, pc):
-        return (mapper.cpu_read(pc+1)+x) & 0xFF
-    def _resolve_zero_page_indexed_y(mapper, pc):
-        return (mapper.cpu_read(pc+1)+y) & 0xFF
-    def _resolve_absolute(mapper, pc):
-        return (mapper.cpu_read(pc+1)|(mapper.cpu_read(pc+2)<<8))
-    def _resolve_absolute_indexed_x(mapper, pc):
+    def resolve_zero_page(pc):
+        return fetch(pc+1)
+    def resolve_zero_page_indexed_x(pc):
+        return (fetch(pc+1)+x) & 0xFF
+    def resolve_zero_page_indexed_y(pc):
+        return (fetch(pc+1)+y) & 0xFF
+    def resolve_absolute(pc):
+        return (fetch(pc+1)|(fetch(pc+2)<<8))
+    def resolve_absolute_indexed_x(pc):
         nonlocal t
-        addr = mapper.cpu_read(pc+1) + x
+        addr = fetch(pc+1) + x
         t += addr>>8
-        return (addr+(mapper.cpu_read(pc+2)<<8)) & 0xFFFF
-    def _resolve_absolute_indexed_y(mapper, pc):
+        return (addr+(fetch(pc+2)<<8)) & 0xFFFF
+    def resolve_absolute_indexed_y(pc):
         nonlocal t
-        addr = mapper.cpu_read(pc+1) + y
+        addr = fetch(pc+1) + y
         t += addr>>8
-        return (addr+(mapper.cpu_read(pc+2)<<8)) & 0xFFFF
-    def _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc):
-        return ((mapper.cpu_read(pc+1)|(mapper.cpu_read(pc+2)<<8))+x) & 0xFFFF
-    def _resolve_absolute_indexed_y_no_extra_cycle(mapper, pc):
-        return ((mapper.cpu_read(pc+1)|(mapper.cpu_read(pc+2)<<8))+y) & 0xFFFF
-    def _resolve_indexed_indirect(mapper, pc):
-        i = mapper.cpu_read(pc+1) + x
-        return mapper.cpu_read(i&0xFF)|(mapper.cpu_read((i+1)&0xFF)<<8)
-    def _resolve_indirect_indexed(mapper, pc):
+        return (addr+(fetch(pc+2)<<8)) & 0xFFFF
+    def resolve_absolute_indexed_x_no_extra_cycle(pc):
+        return ((fetch(pc+1)|(fetch(pc+2)<<8))+x) & 0xFFFF
+    def resolve_absolute_indexed_y_no_extra_cycle(pc):
+        return ((fetch(pc+1)|(fetch(pc+2)<<8))+y) & 0xFFFF
+    def resolve_indexed_indirect(pc):
+        i = fetch(pc+1) + x
+        return fetch(i&0xFF)|(fetch((i+1)&0xFF)<<8)
+    def resolve_indirect_indexed(pc):
         nonlocal t
-        i = mapper.cpu_read(pc+1)
-        addr = mapper.cpu_read(i) + y
+        i = fetch(pc+1)
+        addr = fetch(i) + y
         t += addr>>8
-        return (addr+(mapper.cpu_read((i+1)&0xFF)<<8)) & 0xFFFF
-    def _resolve_indirect_indexed_no_extra_cycle(mapper, pc):
-        i = mapper.cpu_read(pc+1)
-        return ((mapper.cpu_read(i)|(mapper.cpu_read((i+1)&0xFF)<<8))+y) & 0xFFFF
-    def _resolve_indirect(mapper, pc):
-        addr = mapper.cpu_read(pc+1) | (mapper.cpu_read(pc+2)<<8)
-        return mapper.cpu_read(addr) | (mapper.cpu_read((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
-    def _resolve_relative(mapper, pc):
+        return (addr+(fetch((i+1)&0xFF)<<8)) & 0xFFFF
+    def resolve_indirect_indexed_no_extra_cycle(pc):
+        i = fetch(pc+1)
+        return ((fetch(i)|(fetch((i+1)&0xFF)<<8))+y) & 0xFFFF
+    def resolve_indirect(pc):
+        addr = fetch(pc+1) | (fetch(pc+2)<<8)
+        return fetch(addr) | (fetch((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
+    def resolve_relative(pc):
         nonlocal t
-        rel_addr = signed8(mapper.cpu_read(pc+1))
+        rel_addr = signed8(fetch(pc+1))
         pc += 2
         t += (((pc&0xFF)+rel_addr)>>8) & 1
         return pc + rel_addr
 
-    # Interrupts
-
-    def _trigger_interrupt(new_pc):
-        # note that this is the only place pc is used outside of the main loop,
-        # as interrupts are the only exception to normal execution
-        nonlocal pc
-        nonlocal t, s
-        mapper.cpu_write(STACK_OFFSET+s, pc<<8)
-        s = (s-1) & 0xFF
-        mapper.cpu_write(STACK_OFFSET+s, pc&0xFF)
-        s = (s-1) & 0xFF
-        mapper.cpu_write(STACK_OFFSET+s, p|U)
-        s = (s-1) & 0xFF
-        t += 7
-        pc = new_pc
-
-    def _nmi():
-        _trigger_interrupt(mapper.cpu_read(0xFFFA)|(mapper.cpu_read(0xFFFB)<<8))
-
-    def _reset():
-        _trigger_interrupt(mapper.cpu_read(0xFFFC)|(mapper.cpu_read(0xFFFD)<<8))
-
-    def _irq():
-        if p&I:
-            return pc  # interrupt disabled
-        _trigger_interrupt(mapper.cpu_read(0xFFFE)|(mapper.cpu_read(0xFFFF)<<8))
-
     # Instructions
-
-    interrupts = (_nmi, _reset, _irq)
-
-    def _build_undefined_op(opcode):
-        def undefined_op(pc):
-            raise ValueError('Undefined opcode {}'.format(opcode))
-        return undefined_op
-
-    ops = [_build_undefined_op(opcode) for opcode in range(0x100)]
 
     # ADC (ADd with Carry)
     # Writes flags: N V Z C
-    def _69_adc_immediate(pc):
+    def adc_69_immediate(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_immediate(mapper, pc))
+        m = fetch(resolve_immediate(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
         return pc + 2
-    def _65_adc_zero_page(pc):
+    def adc_65_zero_page(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        m = fetch(resolve_zero_page(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 3
         return pc + 2
-    def _75_adc_zero_page_indexed_x(pc):
+    def adc_75_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        m = fetch(resolve_zero_page_indexed_x(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 2
-    def _6d_adc_absolute(pc):
+    def adc_6d_absolute(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_absolute(mapper, pc))
+        m = fetch(resolve_absolute(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _7d_adc_absolute_indexed_x(pc):
+    def adc_7d_absolute_indexed_x(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        m = fetch(resolve_absolute_indexed_x(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _79_adc_absolute_indexed_y(pc):
+    def adc_79_absolute_indexed_y(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        m = fetch(resolve_absolute_indexed_y(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _61_adc_indexed_indirect(pc):
+    def adc_61_indexed_indirect(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        m = fetch(resolve_indexed_indirect(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 6
         return pc + 2
-    def _71_adc_indirect_indexed(pc):
+    def adc_71_indirect_indexed(pc):
         nonlocal t, a, p
-        m = mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        m = fetch(resolve_indirect_indexed(pc))
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
@@ -904,422 +888,422 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
     
     # AND (bitwise AND with accumulator)
     # Writes flags: N Z
-    def _29_and_immediate(pc):
+    def and_29_immediate(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_immediate(mapper, pc))
+        a &= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
-    def _25_and_zero_page(pc):
+    def and_25_zero_page(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        a &= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
-    def _35_and_zero_page_indexed_x(pc):
+    def and_35_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        a &= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
-    def _2d_and_absolute(pc):
+    def and_2d_absolute(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_absolute(mapper, pc))
+        a &= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _3d_and_absolute_indexed_x(pc):
+    def and_3d_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        a &= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _39_and_absolute_indexed_y(pc):
+    def and_39_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        a &= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _21_and_indexed_indirect(pc):
+    def and_21_indexed_indirect(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        a &= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
-    def _31_and_indirect_indexed(pc):
+    def and_31_indirect_indexed(pc):
         nonlocal t, a, p
-        a &= mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        a &= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
     # ASL (Arithmetic Shift Left)
     # Writes flags: N Z C
-    def _0a_asl_accumulator(pc):
+    def asl_0a_accumulator(pc):
         nonlocal t, a, p
         r = a << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
         return pc + 1
-    def _06_asl_zero_page(pc):
+    def asl_06_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 5
         return pc + 2
-    def _16_asl_zero_page_indexed_x(pc):
+    def asl_16_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 2
-    def _0e_asl_absolute(pc):
+    def asl_0e_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 3
-    def _1e_asl_absolute_indexed_x(pc):
+    def asl_1e_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        m = fetch(addr)
         r = m << 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 7
         return pc + 3
     
     # BIT (test BITs)
     # Writes flags: N V Z
-    def _24_bit_zero_page(pc):
+    def bit_24_zero_page(pc):
         nonlocal t, p
-        m = mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        m = fetch(resolve_zero_page(pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 3
         return pc + 2
-    def _2c_bit_absolute(pc):
+    def bit_2c_absolute(pc):
         nonlocal t, p
-        m = mapper.cpu_read(_resolve_absolute(mapper, pc))
+        m = fetch(resolve_absolute(pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 4
         return pc + 3
     
     # Branch Instructions
     # BPL (Branch on PLus)
-    def _10_bpl(pc):
+    def bpl_10(pc):
         nonlocal t
         if p & N:
             t += 2
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
     # BMI (Branch on MInus)
-    def _30_bmi(pc):
+    def bmi_30(pc):
         nonlocal t
         if p & N:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
         else:
             t += 2
             return pc + 2
     # BVC (Branch on oVerflow Clear)
-    def _50_bvc(pc):
+    def bvc_50(pc):
         nonlocal t
         if p & V:
             t += 2
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
     # BVS (Branch on oVerflow Set)
-    def _70_bvs(pc):
+    def bvs_70(pc):
         nonlocal t
         if p & V:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
         else:
             t += 2
             return pc + 2
     # BCC (Branch on Carry Clear)
-    def _90_bcc(pc):
+    def bcc_90(pc):
         nonlocal t
         if p & C:
             t += 2
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
     # BCS (Branch on Carry Set)
-    def _b0_bcs(pc):
+    def bcs_b0(pc):
         nonlocal t
         if p & C:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
         else:
             t += 2
             return pc + 2
     # BNE (Branch on Not Equal)
-    def _d0_bne(pc):
+    def bne_d0(pc):
         nonlocal t
         if p & Z:
             t += 2
             return pc + 2
         else:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
     # BEQ (Branch on EQual)
-    def _f0_beq(pc):
+    def beq_f0(pc):
         nonlocal t
         if p & Z:
             t += 3
-            return _resolve_relative(mapper, pc)
+            return resolve_relative(pc)
         else:
             t += 2
             return pc + 2
     
     # BRK (BReaK)
     # Writes flags: B
-    def _00_brk_implied(_):
+    def brk_00_implied(_):
         nonlocal p
         p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
-        _irq()
+        trigger_irq()
         return pc
-    def _00_brk_implied_stop_execution(_):  # for unit testing / debugging
+    def brk_00_implied_stop_execution(_):  # for unit testing / debugging
         raise VMStop()
     
     # CMP (CoMPare accumulator)
     # Writes flags: N Z C
-    def _c9_cmp_immediate(pc):
+    def cmp_c9_immediate(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_immediate(mapper, pc))
+        r = a - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
-    def _c5_cmp_zero_page(pc):
+    def cmp_c5_zero_page(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        r = a - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
-    def _d5_cmp_zero_page_indexed_x(pc):
+    def cmp_d5_zero_page_indexed_x(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        r = a - fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 2
-    def _cd_cmp_absolute(pc):
+    def cmp_cd_absolute(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_absolute(mapper, pc))
+        r = a - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
-    def _dd_cmp_absolute_indexed_x(pc):
+    def cmp_dd_absolute_indexed_x(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        r = a - fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
-    def _d9_cmp_absolute_indexed_y(pc):
+    def cmp_d9_absolute_indexed_y(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        r = a - fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
-    def _c1_cmp_indexed_indirect(pc):
+    def cmp_c1_indexed_indirect(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        r = a - fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 6
         return pc + 2
-    def _d1_cmp_indirect_indexed(pc):
+    def cmp_d1_indirect_indexed(pc):
         nonlocal t, p
-        r = a - mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        r = a - fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 5
         return pc + 2
     
     # CPX (ComPare X register)
     # Writes flags: N Z C
-    def _e0_cpx_immediate(pc):
+    def cpx_e0_immediate(pc):
         nonlocal t, p
-        r = x - mapper.cpu_read(_resolve_immediate(mapper, pc))
+        r = x - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
-    def _e4_cpx_zero_page(pc):
+    def cpx_e4_zero_page(pc):
         nonlocal t, p
-        r = x - mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        r = x - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
-    def _ec_cpx_absolute(pc):
+    def cpx_ec_absolute(pc):
         nonlocal t, p
-        r = x - mapper.cpu_read(_resolve_absolute(mapper, pc))
+        r = x - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     
     # CPY (ComPare Y register)
     # Writes flags: N Z C
-    def _c0_cpy_immediate(pc):
+    def cpy_c0_immediate(pc):
         nonlocal t, p
-        r = y - mapper.cpu_read(_resolve_immediate(mapper, pc))
+        r = y - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
         return pc + 2
-    def _c4_cpy_zero_page(pc):
+    def cpy_c4_zero_page(pc):
         nonlocal t, p
-        r = y - mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        r = y - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
         return pc + 2
-    def _cc_cpy_absolute(pc):
+    def cpy_cc_absolute(pc):
         nonlocal t, p
-        r = y - mapper.cpu_read(_resolve_absolute(mapper, pc))
+        r = y - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
         return pc + 3
     
     # DEC (DECrement memory)
     # Writes flags: N Z
-    def _c6_dec_zero_page(pc):
+    def dec_c6_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 5
         return pc + 2
-    def _d6_dec_zero_page_indexed_x(pc):
+    def dec_d6_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 2
-    def _ce_dec_absolute(pc):
+    def dec_ce_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 3
-    def _de_dec_absolute_indexed_x(pc):
+    def dec_de_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        m = fetch(addr)
         r = m - 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 7
         return pc + 3
     
     # EOR (bitwise Exclusive OR)
     # Writes flags: N Z
-    def _49_eor_immediate(pc):
+    def eor_49_immediate(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_immediate(mapper, pc))
+        a ^= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
-    def _45_eor_zero_page(pc):
+    def eor_45_zero_page(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        a ^= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
-    def _55_eor_zero_page_indexed_x(pc):
+    def eor_55_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        a ^= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
-    def _4d_eor_absolute(pc):
+    def eor_4d_absolute(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_absolute(mapper, pc))
+        a ^= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _5d_eor_absolute_indexed_x(pc):
+    def eor_5d_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        a ^= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _59_eor_absolute_indexed_y(pc):
+    def eor_59_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        a ^= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _41_eor_indexed_indirect(pc):
+    def eor_41_indexed_indirect(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        a ^= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
-    def _51_eor_indirect_indexed(pc):
+    def eor_51_indirect_indexed(pc):
         nonlocal t, a, p
-        a ^= mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        a ^= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
     # Flag (Processor Status) Instructions
     # CLC (CLear Carry)
-    def _18_clc(pc):
+    def clc_18(pc):
         nonlocal t, p
         p &= MASK_C
         t += 2
         return pc + 1
     # SEC (SEt Carry)
-    def _38_sec(pc):
+    def sec_38(pc):
         nonlocal t, p
         p |= C
         t += 2
         return pc + 1
     # CLI (CLear Interrupt)
-    def _58_cli(pc):
+    def cli_58(pc):
         nonlocal t, p
         p &= MASK_I
         t += 2
         return pc + 1
     # SEI (SEt Interrupt)
-    def _78_sei(pc):
+    def sei_78(pc):
         nonlocal t, p
         p |= I
         t += 2
         return pc + 1
     # CLV (CLear oVerflow)
-    def _b8_clv(pc):
+    def clv_b8(pc):
         nonlocal t, p
         p &= MASK_V
         t += 2
         return pc + 1
     # CLD (CLear Decimal)
-    def _d8_cld(pc):
+    def cld_d8(pc):
         nonlocal t, p
         p &= MASK_D
         t += 2
         return pc + 1
     # SED (SEt Decimal)
-    def _f8_sed(pc):
+    def sed_f8(pc):
         nonlocal t, p
         p |= D
         t += 2
@@ -1327,284 +1311,284 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
     
     # INC (INCrement memory)
     # Writes flags: N Z
-    def _e6_inc_zero_page(pc):
+    def inc_e6_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 5
         return pc + 2
-    def _f6_inc_zero_page_indexed_x(pc):
+    def inc_f6_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 2
-    def _ee_inc_absolute(pc):
+    def inc_ee_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 3
-    def _fe_inc_absolute_indexed_x(pc):
+    def inc_fe_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        m = fetch(addr)
         r = m + 1
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 7
         return pc + 3
     
     # JMP (JuMP)
     # Writes flags: none
-    def _4c_jmp_absolute(pc):
+    def jmp_4c_absolute(pc):
         nonlocal t
         t += 3
-        return _resolve_absolute(mapper, pc)
-    def _6c_jmp_indirect(pc):
+        return resolve_absolute(pc)
+    def jmp_6c_indirect(pc):
         nonlocal t
         t += 5
-        return _resolve_indirect(mapper, pc)
+        return resolve_indirect(pc)
     
     # JSR (Jump to SubRoutine)
     # Writes flags: none
-    def _20_jsr_absolute(pc):
+    def jsr_20_absolute(pc):
         nonlocal t, s
-        to = _resolve_absolute(mapper, pc)
+        to = resolve_absolute(pc)
         pc += 2 # 3 - 1 (offset by one before storing on stack)
-        mapper.cpu_write(STACK_OFFSET+s, pc>>8)
+        store(STACK_OFFSET+s, pc>>8)
         s = (s-1) & 0xFF
-        mapper.cpu_write(STACK_OFFSET+s, pc&0xFF)
+        store(STACK_OFFSET+s, pc&0xFF)
         s = (s-1) & 0xFF
         t += 6
         return to
     
     # LDA (LoaD Accumulator)
     # Writes flags: N Z
-    def _a9_lda_immediate(pc):
+    def lda_a9_immediate(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_immediate(mapper, pc))
+        a = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
-    def _a5_lda_zero_page(pc):
+    def lda_a5_zero_page(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        a = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
-    def _b5_lda_zero_page_indexed_x(pc):
+    def lda_b5_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        a = fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
-    def _ad_lda_absolute(pc):
+    def lda_ad_absolute(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_absolute(mapper, pc))
+        a = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _bd_lda_absolute_indexed_x(pc):
+    def lda_bd_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        a = fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _b9_lda_absolute_indexed_y(pc):
+    def lda_b9_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        a = fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _a1_lda_indexed_indirect(pc):
+    def lda_a1_indexed_indirect(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        a = fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
-    def _b1_lda_indirect_indexed(pc):
+    def lda_b1_indirect_indexed(pc):
         nonlocal t, a, p
-        a = mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        a = fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
     
     # LDX (LoaD X register)
     # Writes flags: N Z
-    def _a2_ldx_immediate(pc):
+    def ldx_a2_immediate(pc):
         nonlocal t, x, p
-        x = mapper.cpu_read(_resolve_immediate(mapper, pc))
+        x = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 2
         return pc + 2
-    def _a6_ldx_zero_page(pc):
+    def ldx_a6_zero_page(pc):
         nonlocal t, x, p
-        x = mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        x = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 3
         return pc + 2
-    def _b6_ldx_zero_page_indexed_y(pc):
+    def ldx_b6_zero_page_indexed_y(pc):
         nonlocal t, x, p
-        x = mapper.cpu_read(_resolve_zero_page_indexed_y(mapper, pc))
+        x = fetch(resolve_zero_page_indexed_y(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 2
-    def _ae_ldx_absolute(pc):
+    def ldx_ae_absolute(pc):
         nonlocal t, x, p
-        x = mapper.cpu_read(_resolve_absolute(mapper, pc))
+        x = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
-    def _be_ldx_absolute_indexed_y(pc):
+    def ldx_be_absolute_indexed_y(pc):
         nonlocal t, x, p
-        x = mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        x = fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
         return pc + 3
     
     # LDY (LoaD Y register)
     # Writes flags: N Z
-    def _a0_ldy_immediate(pc):
+    def ldy_a0_immediate(pc):
         nonlocal t, y, p
-        y = mapper.cpu_read(_resolve_immediate(mapper, pc))
+        y = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 2
         return pc + 2
-    def _a4_ldy_zero_page(pc):
+    def ldy_a4_zero_page(pc):
         nonlocal t, y, p
-        y = mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        y = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 3
         return pc + 2
-    def _b4_ldy_zero_page_indexed_x(pc):
+    def ldy_b4_zero_page_indexed_x(pc):
         nonlocal t, y, p
-        y = mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        y = fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 2
-    def _ac_ldy_absolute(pc):
+    def ldy_ac_absolute(pc):
         nonlocal t, y, p
-        y = mapper.cpu_read(_resolve_absolute(mapper, pc))
+        y = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
-    def _bc_ldy_absolute_indexed_x(pc):
+    def ldy_bc_absolute_indexed_x(pc):
         nonlocal t, y, p
-        y = mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        y = fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
         return pc + 3
     
     # LSR (Logical Shift Right)
     # Writes flags: N Z C
-    def _4a_lsr_accumulator(pc):
+    def lsr_4a_accumulator(pc):
         nonlocal t, a, p
         r = a >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
         a = r
         t += 2
         return pc + 1
-    def _46_lsr_zero_page(pc):
+    def lsr_46_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r)
+        store(addr, r)
         t += 5
         return pc + 2
-    def _56_lsr_zero_page_indexed_x(pc):
+    def lsr_56_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r)
+        store(addr, r)
         t += 6
         return pc + 2
-    def _4e_lsr_absolute(pc):
+    def lsr_4e_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r)
+        store(addr, r)
         t += 6
         return pc + 3
-    def _5e_lsr_absolute_indexed_x(pc):
+    def lsr_5e_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        m = fetch(addr)
         r = m >> 1
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r)
+        store(addr, r)
         t += 7
         return pc + 3
     
     # NOP (No OPeration)
     # Writes flags: none
-    def _ea_nop_implied(pc):
+    def nop_ea_implied(pc):
         nonlocal t
         t += 2
         return pc + 1
     
     # ORA (bitwise OR with Accumulator)
     # Writes flags: N Z
-    def _09_ora_immediate(pc):
+    def ora_09_immediate(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_immediate(mapper, pc))
+        a |= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 2
-    def _05_ora_zero_page(pc):
+    def ora_05_zero_page(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_zero_page(mapper, pc))
+        a |= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
         return pc + 2
-    def _15_ora_zero_page_indexed_x(pc):
+    def ora_15_zero_page_indexed_x(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_zero_page_indexed_x(mapper, pc))
+        a |= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 2
-    def _0d_ora_absolute(pc):
+    def ora_0d_absolute(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_absolute(mapper, pc))
+        a |= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _1d_ora_absolute_indexed_x(pc):
+    def ora_1d_absolute_indexed_x(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_absolute_indexed_x(mapper, pc))
+        a |= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _19_ora_absolute_indexed_y(pc):
+    def ora_19_absolute_indexed_y(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_absolute_indexed_y(mapper, pc))
+        a |= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 3
-    def _01_ora_indexed_indirect(pc):
+    def ora_01_indexed_indirect(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_indexed_indirect(mapper, pc))
+        a |= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
         return pc + 2
-    def _11_ora_indirect_indexed(pc):
+    def ora_11_indirect_indexed(pc):
         nonlocal t, a, p
-        a |= mapper.cpu_read(_resolve_indirect_indexed(mapper, pc))
+        a |= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
         return pc + 2
@@ -1612,56 +1596,56 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
     # Register Instructions
     # Writes flags: N Z
     # TAX (Transfer A to X)
-    def _aa_tax(pc):
+    def tax_aa(pc):
         nonlocal t, x, p
         x = a
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
         return pc + 1
     # TXA (Transfer X to A)
-    def _8a_txa(pc):
+    def txa_8a(pc):
         nonlocal t, a, p
         a = x
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 1
     # DEX (DEcrement X)
-    def _ca_dex(pc):
+    def dex_ca(pc):
         nonlocal t, x, p
         x = (x - 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
         return pc + 1
     # INX (INcrement X)
-    def _e8_inx(pc):
+    def inx_e8(pc):
         nonlocal t, x, p
         x = (x + 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
         return pc + 1
     # TAY (Transfer A to Y)
-    def _a8_tay(pc):
+    def tay_a8(pc):
         nonlocal t, y, p
         y = a
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
         t += 2
         return pc + 1
     # TYA (Transfer Y to A)
-    def _98_tya(pc):
+    def tya_98(pc):
         nonlocal t, a, p
         a = y
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
         return pc + 1
     # DEY (DEcrement Y)
-    def _88_dey(pc):
+    def dey_88(pc):
         nonlocal t, y, p
         y = (y - 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
         t += 2
         return pc + 1
     # INY (INcrement Y)
-    def _c8_iny(pc):
+    def iny_c8(pc):
         nonlocal t, y, p
         y = (y + 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
@@ -1670,184 +1654,184 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
     
     # ROL (ROtate Left)
     # Writes flags: N Z C
-    def _2a_rol_accumulator(pc):
+    def rol_2a_accumulator(pc):
         nonlocal t, a, p
         r = (a<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
         return pc + 1
-    def _26_rol_zero_page(pc):
+    def rol_26_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        r = (mapper.cpu_read(addr)<<1) | (p&C)
+        addr = resolve_zero_page(pc)
+        r = (fetch(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 5
         return pc + 2
-    def _36_rol_zero_page_indexed_x(pc):
+    def rol_36_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        r = (mapper.cpu_read(addr)<<1) | (p&C)
+        addr = resolve_zero_page_indexed_x(pc)
+        r = (fetch(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 2
-    def _2e_rol_absolute(pc):
+    def rol_2e_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        r = (mapper.cpu_read(addr)<<1) | (p&C)
+        addr = resolve_absolute(pc)
+        r = (fetch(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 3
-    def _3e_rol_absolute_indexed_x(pc):
+    def rol_3e_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        r = (mapper.cpu_read(addr)<<1) | (p&C)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        r = (fetch(addr)<<1) | (p&C)
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 7
         return pc + 3
     
     # ROR (ROtate Right)
     # Writes flags: N Z C
-    def _6a_ror_accumulator(pc):
+    def ror_6a_accumulator(pc):
         nonlocal t, a, p
         r = (a>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
         a = r & 0xFF
         t += 2
         return pc + 1
-    def _66_ror_zero_page(pc):
+    def ror_66_zero_page(pc):
         nonlocal t, p
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 5
         return pc + 2
-    def _76_ror_zero_page_indexed_x(pc):
+    def ror_76_zero_page_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 2
-    def _6e_ror_absolute(pc):
+    def ror_6e_absolute(pc):
         nonlocal t, p
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 6
         return pc + 3
-    def _7e_ror_absolute_indexed_x(pc):
+    def ror_7e_absolute_indexed_x(pc):
         nonlocal t, p
-        addr = _resolve_absolute_indexed_x_no_extra_cycle(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
+        m = fetch(addr)
         r = (m>>1) | ((p&C)<<7)
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
-        mapper.cpu_write(addr, r&0xFF)
+        store(addr, r&0xFF)
         t += 7
         return pc + 3
     
     # RTI (ReTurn from Interrupt)
     # Writes flags: all
-    def _40_rti_implied(pc):
+    def rti_40_implied(pc):
         nonlocal t, p, s
         s = (s+1) & 0xFF
-        p = mapper.cpu_read(STACK_OFFSET+s) & MASK_B | U
+        p = fetch(STACK_OFFSET+s) & MASK_B | U
         s = (s+1) & 0xFF
-        pc = mapper.cpu_read(STACK_OFFSET+s)
+        pc = fetch(STACK_OFFSET+s)
         s = (s+1) & 0xFF
-        pc |= mapper.cpu_read(STACK_OFFSET+s) << 8
+        pc |= fetch(STACK_OFFSET+s) << 8
         t += 6
         return pc
     
     # RTS (ReTurn from Subroutine)
     # Writes flags: none
-    def _60_rts_implied(pc):
+    def rts_60_implied(pc):
         nonlocal t, s
         s = (s+1) & 0xFF
-        pc = mapper.cpu_read(STACK_OFFSET+s)
+        pc = fetch(STACK_OFFSET+s)
         s = (s+1) & 0xFF
-        pc |= mapper.cpu_read(STACK_OFFSET+s) << 8
+        pc |= fetch(STACK_OFFSET+s) << 8
         t += 6
         return pc + 1
     
     # SBC (SuBtract with Carry)
     # Writes flags: N V Z C
-    def _e9_sbc_immediate(pc):
+    def sbc_e9_immediate(pc):
         nonlocal t, p, a
-        m = mapper.cpu_read(_resolve_immediate(mapper, pc))
+        m = fetch(resolve_immediate(pc))
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 2
         return pc + 2
-    def _e5_sbc_zero_page(pc):
+    def sbc_e5_zero_page(pc):
         nonlocal t, p, a
-        addr = _resolve_zero_page(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 3
         return pc + 2
-    def _f5_sbc_zero_page_indexed_x(pc):
+    def sbc_f5_zero_page_indexed_x(pc):
         nonlocal t, p, a
-        addr = _resolve_zero_page_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_zero_page_indexed_x(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 2
-    def _ed_sbc_absolute(pc):
+    def sbc_ed_absolute(pc):
         nonlocal t, p, a
-        addr = _resolve_absolute(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _fd_sbc_absolute_indexed_x(pc):
+    def sbc_fd_absolute_indexed_x(pc):
         nonlocal t, p, a
-        addr = _resolve_absolute_indexed_x(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_x(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _f9_sbc_absolute_indexed_y(pc):
+    def sbc_f9_absolute_indexed_y(pc):
         nonlocal t, p, a
-        addr = _resolve_absolute_indexed_y(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_absolute_indexed_y(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
         return pc + 3
-    def _e1_sbc_indexed_indirect(pc):
+    def sbc_e1_indexed_indirect(pc):
         nonlocal t, p, a
-        addr = _resolve_indexed_indirect(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_indexed_indirect(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 6
         return pc + 2
-    def _f1_sbc_indirect_indexed(pc):
+    def sbc_f1_indirect_indexed(pc):
         nonlocal t, p, a
-        addr = _resolve_indirect_indexed(mapper, pc)
-        m = mapper.cpu_read(addr)
+        addr = resolve_indirect_indexed(pc)
+        m = fetch(addr)
         r = a - m - (~p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
@@ -1856,277 +1840,338 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
     
     # STA (STore Accumulator)
     # Writes flags: none
-    def _85_sta_zero_page(pc):
+    def sta_85_zero_page(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page(mapper, pc), a)
+        store(resolve_zero_page(pc), a)
         t += 3
         return pc + 2
-    def _95_sta_zero_page_indexed_x(pc):
+    def sta_95_zero_page_indexed_x(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page_indexed_x(mapper, pc), a)
+        store(resolve_zero_page_indexed_x(pc), a)
         t += 4
         return pc + 2
-    def _8d_sta_absolute(pc):
+    def sta_8d_absolute(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_absolute(mapper, pc), a)
+        store(resolve_absolute(pc), a)
         t += 4
         return pc + 3
-    def _9d_sta_absolute_indexed_x(pc):
+    def sta_9d_absolute_indexed_x(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_absolute_indexed_x_no_extra_cycle(mapper, pc), a)
+        store(resolve_absolute_indexed_x_no_extra_cycle(pc), a)
         t += 5
         return pc + 3
-    def _99_sta_absolute_indexed_y(pc):
+    def sta_99_absolute_indexed_y(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_absolute_indexed_y_no_extra_cycle(mapper, pc), a)
+        store(resolve_absolute_indexed_y_no_extra_cycle(pc), a)
         t += 5
         return pc + 3
-    def _81_sta_indexed_indirect(pc):
+    def sta_81_indexed_indirect(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_indexed_indirect(mapper, pc), a)
+        store(resolve_indexed_indirect(pc), a)
         t += 6
         return pc + 2
-    def _91_sta_indirect_indexed(pc):
+    def sta_91_indirect_indexed(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_indirect_indexed_no_extra_cycle(mapper, pc), a)
+        store(resolve_indirect_indexed_no_extra_cycle(pc), a)
         t += 6
         return pc + 2
     
     # Stack Instructions
     # TXS (Transfer X to Stack ptr)
-    def _9a_txs(pc):
+    def txs_9a(pc):
         nonlocal t, s
         s = x
         t += 2
         return pc + 1
     # TSX (Transfer Stack ptr to X)
-    def _ba_tsx(pc):
+    def tsx_ba(pc):
         nonlocal t, x, p
         x = s
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
         return pc + 1
     # PHA (PusH Accumulator)
-    def _48_pha(pc):
+    def pha_48(pc):
         nonlocal t, s
-        mapper.cpu_write(STACK_OFFSET+s, a)
+        store(STACK_OFFSET+s, a)
         s = (s-1) & 0xFF
         t += 3
         return pc + 1
     # PLA (PuLl Accumulator)
-    def _68_pla(pc):
+    def pla_68(pc):
         nonlocal t, s, a, p
         s = (s+1) & 0xFF
-        a = mapper.cpu_read(STACK_OFFSET+s)
+        a = fetch(STACK_OFFSET+s)
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
         return pc + 1
     # PHP (PusH Processor status)
-    def _08_php(pc):
+    def php_08(pc):
         nonlocal t, s
-        mapper.cpu_write(STACK_OFFSET+s, p|B|U)
+        store(STACK_OFFSET+s, p|B|U)
         s = (s-1) & 0xFF
         t += 3
         return pc + 1
     # PLP (PuLl Processor status)
-    def _28_plp(pc):
+    def plp_28(pc):
         nonlocal t, s, p
         s = (s+1) & 0xFF
-        p = mapper.cpu_read(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
+        p = fetch(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
         t += 4
         return pc + 1
     
     # STX (STore X register)
     # Writes flags: none
-    def _86_stx_zero_page(pc):
+    def stx_86_zero_page(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page(mapper, pc), x)
+        store(resolve_zero_page(pc), x)
         t += 3
         return pc + 2
-    def _96_stx_zero_page_indexed_y(pc):
+    def stx_96_zero_page_indexed_y(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page_indexed_y(mapper, pc), x)
+        store(resolve_zero_page_indexed_y(pc), x)
         t += 4
         return pc + 2
-    def _8e_stx_absolute(pc):
+    def stx_8e_absolute(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_absolute(mapper, pc), x)
+        store(resolve_absolute(pc), x)
         t += 4
         return pc + 3
     
     # STY (STore Y register)
     # Writes flags: none
-    def _84_sty_zero_page(pc):
+    def sty_84_zero_page(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page(mapper, pc), y)
+        store(resolve_zero_page(pc), y)
         t += 3
         return pc + 2
-    def _94_sty_zero_page_indexed_x(pc):
+    def sty_94_zero_page_indexed_x(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_zero_page_indexed_x(mapper, pc), y)
+        store(resolve_zero_page_indexed_x(pc), y)
         t += 4
         return pc + 2
-    def _8c_sty_absolute(pc):
+    def sty_8c_absolute(pc):
         nonlocal t
-        mapper.cpu_write(_resolve_absolute(mapper, pc), y)
+        store(resolve_absolute(pc), y)
         t += 4
         return pc + 3
-    
-    ops[0x69] = _69_adc_immediate
-    ops[0x65] = _65_adc_zero_page
-    ops[0x75] = _75_adc_zero_page_indexed_x
-    ops[0x6d] = _6d_adc_absolute
-    ops[0x7d] = _7d_adc_absolute_indexed_x
-    ops[0x79] = _79_adc_absolute_indexed_y
-    ops[0x61] = _61_adc_indexed_indirect
-    ops[0x71] = _71_adc_indirect_indexed
-    ops[0x29] = _29_and_immediate
-    ops[0x25] = _25_and_zero_page
-    ops[0x35] = _35_and_zero_page_indexed_x
-    ops[0x2d] = _2d_and_absolute
-    ops[0x3d] = _3d_and_absolute_indexed_x
-    ops[0x39] = _39_and_absolute_indexed_y
-    ops[0x21] = _21_and_indexed_indirect
-    ops[0x31] = _31_and_indirect_indexed
-    ops[0x0a] = _0a_asl_accumulator
-    ops[0x06] = _06_asl_zero_page
-    ops[0x16] = _16_asl_zero_page_indexed_x
-    ops[0x0e] = _0e_asl_absolute
-    ops[0x1e] = _1e_asl_absolute_indexed_x
-    ops[0x24] = _24_bit_zero_page
-    ops[0x2c] = _2c_bit_absolute
-    ops[0x10] = _10_bpl
-    ops[0x30] = _30_bmi
-    ops[0x50] = _50_bvc
-    ops[0x70] = _70_bvs
-    ops[0x90] = _90_bcc
-    ops[0xb0] = _b0_bcs
-    ops[0xd0] = _d0_bne
-    ops[0xf0] = _f0_beq
-    ops[0x00] = _00_brk_implied_stop_execution if stop_on_brk else _00_brk_implied
-    ops[0xc9] = _c9_cmp_immediate
-    ops[0xc5] = _c5_cmp_zero_page
-    ops[0xd5] = _d5_cmp_zero_page_indexed_x
-    ops[0xcd] = _cd_cmp_absolute
-    ops[0xdd] = _dd_cmp_absolute_indexed_x
-    ops[0xd9] = _d9_cmp_absolute_indexed_y
-    ops[0xc1] = _c1_cmp_indexed_indirect
-    ops[0xd1] = _d1_cmp_indirect_indexed
-    ops[0xe0] = _e0_cpx_immediate
-    ops[0xe4] = _e4_cpx_zero_page
-    ops[0xec] = _ec_cpx_absolute
-    ops[0xc0] = _c0_cpy_immediate
-    ops[0xc4] = _c4_cpy_zero_page
-    ops[0xcc] = _cc_cpy_absolute
-    ops[0xc6] = _c6_dec_zero_page
-    ops[0xd6] = _d6_dec_zero_page_indexed_x
-    ops[0xce] = _ce_dec_absolute
-    ops[0xde] = _de_dec_absolute_indexed_x
-    ops[0x49] = _49_eor_immediate
-    ops[0x45] = _45_eor_zero_page
-    ops[0x55] = _55_eor_zero_page_indexed_x
-    ops[0x4d] = _4d_eor_absolute
-    ops[0x5d] = _5d_eor_absolute_indexed_x
-    ops[0x59] = _59_eor_absolute_indexed_y
-    ops[0x41] = _41_eor_indexed_indirect
-    ops[0x51] = _51_eor_indirect_indexed
-    ops[0x18] = _18_clc
-    ops[0x38] = _38_sec
-    ops[0x58] = _58_cli
-    ops[0x78] = _78_sei
-    ops[0xb8] = _b8_clv
-    ops[0xd8] = _d8_cld
-    ops[0xf8] = _f8_sed
-    ops[0xe6] = _e6_inc_zero_page
-    ops[0xf6] = _f6_inc_zero_page_indexed_x
-    ops[0xee] = _ee_inc_absolute
-    ops[0xfe] = _fe_inc_absolute_indexed_x
-    ops[0x4c] = _4c_jmp_absolute
-    ops[0x6c] = _6c_jmp_indirect
-    ops[0x20] = _20_jsr_absolute
-    ops[0xa9] = _a9_lda_immediate
-    ops[0xa5] = _a5_lda_zero_page
-    ops[0xb5] = _b5_lda_zero_page_indexed_x
-    ops[0xad] = _ad_lda_absolute
-    ops[0xbd] = _bd_lda_absolute_indexed_x
-    ops[0xb9] = _b9_lda_absolute_indexed_y
-    ops[0xa1] = _a1_lda_indexed_indirect
-    ops[0xb1] = _b1_lda_indirect_indexed
-    ops[0xa2] = _a2_ldx_immediate
-    ops[0xa6] = _a6_ldx_zero_page
-    ops[0xb6] = _b6_ldx_zero_page_indexed_y
-    ops[0xae] = _ae_ldx_absolute
-    ops[0xbe] = _be_ldx_absolute_indexed_y
-    ops[0xa0] = _a0_ldy_immediate
-    ops[0xa4] = _a4_ldy_zero_page
-    ops[0xb4] = _b4_ldy_zero_page_indexed_x
-    ops[0xac] = _ac_ldy_absolute
-    ops[0xbc] = _bc_ldy_absolute_indexed_x
-    ops[0x4a] = _4a_lsr_accumulator
-    ops[0x46] = _46_lsr_zero_page
-    ops[0x56] = _56_lsr_zero_page_indexed_x
-    ops[0x4e] = _4e_lsr_absolute
-    ops[0x5e] = _5e_lsr_absolute_indexed_x
-    ops[0xea] = _ea_nop_implied
-    ops[0x09] = _09_ora_immediate
-    ops[0x05] = _05_ora_zero_page
-    ops[0x15] = _15_ora_zero_page_indexed_x
-    ops[0x0d] = _0d_ora_absolute
-    ops[0x1d] = _1d_ora_absolute_indexed_x
-    ops[0x19] = _19_ora_absolute_indexed_y
-    ops[0x01] = _01_ora_indexed_indirect
-    ops[0x11] = _11_ora_indirect_indexed
-    ops[0xaa] = _aa_tax
-    ops[0x8a] = _8a_txa
-    ops[0xca] = _ca_dex
-    ops[0xe8] = _e8_inx
-    ops[0xa8] = _a8_tay
-    ops[0x98] = _98_tya
-    ops[0x88] = _88_dey
-    ops[0xc8] = _c8_iny
-    ops[0x2a] = _2a_rol_accumulator
-    ops[0x26] = _26_rol_zero_page
-    ops[0x36] = _36_rol_zero_page_indexed_x
-    ops[0x2e] = _2e_rol_absolute
-    ops[0x3e] = _3e_rol_absolute_indexed_x
-    ops[0x6a] = _6a_ror_accumulator
-    ops[0x66] = _66_ror_zero_page
-    ops[0x76] = _76_ror_zero_page_indexed_x
-    ops[0x6e] = _6e_ror_absolute
-    ops[0x7e] = _7e_ror_absolute_indexed_x
-    ops[0x40] = _40_rti_implied
-    ops[0x60] = _60_rts_implied
-    ops[0xe9] = _e9_sbc_immediate
-    ops[0xe5] = _e5_sbc_zero_page
-    ops[0xf5] = _f5_sbc_zero_page_indexed_x
-    ops[0xed] = _ed_sbc_absolute
-    ops[0xfd] = _fd_sbc_absolute_indexed_x
-    ops[0xf9] = _f9_sbc_absolute_indexed_y
-    ops[0xe1] = _e1_sbc_indexed_indirect
-    ops[0xf1] = _f1_sbc_indirect_indexed
-    ops[0x85] = _85_sta_zero_page
-    ops[0x95] = _95_sta_zero_page_indexed_x
-    ops[0x8d] = _8d_sta_absolute
-    ops[0x9d] = _9d_sta_absolute_indexed_x
-    ops[0x99] = _99_sta_absolute_indexed_y
-    ops[0x81] = _81_sta_indexed_indirect
-    ops[0x91] = _91_sta_indirect_indexed
-    ops[0x9a] = _9a_txs
-    ops[0xba] = _ba_tsx
-    ops[0x48] = _48_pha
-    ops[0x68] = _68_pla
-    ops[0x08] = _08_php
-    ops[0x28] = _28_plp
-    ops[0x86] = _86_stx_zero_page
-    ops[0x96] = _96_stx_zero_page_indexed_y
-    ops[0x8e] = _8e_stx_absolute
-    ops[0x84] = _84_sty_zero_page
-    ops[0x94] = _94_sty_zero_page_indexed_x
-    ops[0x8c] = _8c_sty_absolute
+
+    def build_undefined_op(opcode):
+        def undefined_op(pc):
+            raise ValueError('Undefined opcode {}'.format(opcode))
+        return undefined_op
+
+    ops = [build_undefined_op(opcode) for opcode in range(0x100)]
+    ops[0x69] = adc_69_immediate
+    ops[0x65] = adc_65_zero_page
+    ops[0x75] = adc_75_zero_page_indexed_x
+    ops[0x6d] = adc_6d_absolute
+    ops[0x7d] = adc_7d_absolute_indexed_x
+    ops[0x79] = adc_79_absolute_indexed_y
+    ops[0x61] = adc_61_indexed_indirect
+    ops[0x71] = adc_71_indirect_indexed
+    ops[0x29] = and_29_immediate
+    ops[0x25] = and_25_zero_page
+    ops[0x35] = and_35_zero_page_indexed_x
+    ops[0x2d] = and_2d_absolute
+    ops[0x3d] = and_3d_absolute_indexed_x
+    ops[0x39] = and_39_absolute_indexed_y
+    ops[0x21] = and_21_indexed_indirect
+    ops[0x31] = and_31_indirect_indexed
+    ops[0x0a] = asl_0a_accumulator
+    ops[0x06] = asl_06_zero_page
+    ops[0x16] = asl_16_zero_page_indexed_x
+    ops[0x0e] = asl_0e_absolute
+    ops[0x1e] = asl_1e_absolute_indexed_x
+    ops[0x24] = bit_24_zero_page
+    ops[0x2c] = bit_2c_absolute
+    ops[0x10] = bpl_10
+    ops[0x30] = bmi_30
+    ops[0x50] = bvc_50
+    ops[0x70] = bvs_70
+    ops[0x90] = bcc_90
+    ops[0xb0] = bcs_b0
+    ops[0xd0] = bne_d0
+    ops[0xf0] = beq_f0
+    ops[0x00] = brk_00_implied_stop_execution if stop_on_brk else brk_00_implied
+    ops[0xc9] = cmp_c9_immediate
+    ops[0xc5] = cmp_c5_zero_page
+    ops[0xd5] = cmp_d5_zero_page_indexed_x
+    ops[0xcd] = cmp_cd_absolute
+    ops[0xdd] = cmp_dd_absolute_indexed_x
+    ops[0xd9] = cmp_d9_absolute_indexed_y
+    ops[0xc1] = cmp_c1_indexed_indirect
+    ops[0xd1] = cmp_d1_indirect_indexed
+    ops[0xe0] = cpx_e0_immediate
+    ops[0xe4] = cpx_e4_zero_page
+    ops[0xec] = cpx_ec_absolute
+    ops[0xc0] = cpy_c0_immediate
+    ops[0xc4] = cpy_c4_zero_page
+    ops[0xcc] = cpy_cc_absolute
+    ops[0xc6] = dec_c6_zero_page
+    ops[0xd6] = dec_d6_zero_page_indexed_x
+    ops[0xce] = dec_ce_absolute
+    ops[0xde] = dec_de_absolute_indexed_x
+    ops[0x49] = eor_49_immediate
+    ops[0x45] = eor_45_zero_page
+    ops[0x55] = eor_55_zero_page_indexed_x
+    ops[0x4d] = eor_4d_absolute
+    ops[0x5d] = eor_5d_absolute_indexed_x
+    ops[0x59] = eor_59_absolute_indexed_y
+    ops[0x41] = eor_41_indexed_indirect
+    ops[0x51] = eor_51_indirect_indexed
+    ops[0x18] = clc_18
+    ops[0x38] = sec_38
+    ops[0x58] = cli_58
+    ops[0x78] = sei_78
+    ops[0xb8] = clv_b8
+    ops[0xd8] = cld_d8
+    ops[0xf8] = sed_f8
+    ops[0xe6] = inc_e6_zero_page
+    ops[0xf6] = inc_f6_zero_page_indexed_x
+    ops[0xee] = inc_ee_absolute
+    ops[0xfe] = inc_fe_absolute_indexed_x
+    ops[0x4c] = jmp_4c_absolute
+    ops[0x6c] = jmp_6c_indirect
+    ops[0x20] = jsr_20_absolute
+    ops[0xa9] = lda_a9_immediate
+    ops[0xa5] = lda_a5_zero_page
+    ops[0xb5] = lda_b5_zero_page_indexed_x
+    ops[0xad] = lda_ad_absolute
+    ops[0xbd] = lda_bd_absolute_indexed_x
+    ops[0xb9] = lda_b9_absolute_indexed_y
+    ops[0xa1] = lda_a1_indexed_indirect
+    ops[0xb1] = lda_b1_indirect_indexed
+    ops[0xa2] = ldx_a2_immediate
+    ops[0xa6] = ldx_a6_zero_page
+    ops[0xb6] = ldx_b6_zero_page_indexed_y
+    ops[0xae] = ldx_ae_absolute
+    ops[0xbe] = ldx_be_absolute_indexed_y
+    ops[0xa0] = ldy_a0_immediate
+    ops[0xa4] = ldy_a4_zero_page
+    ops[0xb4] = ldy_b4_zero_page_indexed_x
+    ops[0xac] = ldy_ac_absolute
+    ops[0xbc] = ldy_bc_absolute_indexed_x
+    ops[0x4a] = lsr_4a_accumulator
+    ops[0x46] = lsr_46_zero_page
+    ops[0x56] = lsr_56_zero_page_indexed_x
+    ops[0x4e] = lsr_4e_absolute
+    ops[0x5e] = lsr_5e_absolute_indexed_x
+    ops[0xea] = nop_ea_implied
+    ops[0x09] = ora_09_immediate
+    ops[0x05] = ora_05_zero_page
+    ops[0x15] = ora_15_zero_page_indexed_x
+    ops[0x0d] = ora_0d_absolute
+    ops[0x1d] = ora_1d_absolute_indexed_x
+    ops[0x19] = ora_19_absolute_indexed_y
+    ops[0x01] = ora_01_indexed_indirect
+    ops[0x11] = ora_11_indirect_indexed
+    ops[0xaa] = tax_aa
+    ops[0x8a] = txa_8a
+    ops[0xca] = dex_ca
+    ops[0xe8] = inx_e8
+    ops[0xa8] = tay_a8
+    ops[0x98] = tya_98
+    ops[0x88] = dey_88
+    ops[0xc8] = iny_c8
+    ops[0x2a] = rol_2a_accumulator
+    ops[0x26] = rol_26_zero_page
+    ops[0x36] = rol_36_zero_page_indexed_x
+    ops[0x2e] = rol_2e_absolute
+    ops[0x3e] = rol_3e_absolute_indexed_x
+    ops[0x6a] = ror_6a_accumulator
+    ops[0x66] = ror_66_zero_page
+    ops[0x76] = ror_76_zero_page_indexed_x
+    ops[0x6e] = ror_6e_absolute
+    ops[0x7e] = ror_7e_absolute_indexed_x
+    ops[0x40] = rti_40_implied
+    ops[0x60] = rts_60_implied
+    ops[0xe9] = sbc_e9_immediate
+    ops[0xe5] = sbc_e5_zero_page
+    ops[0xf5] = sbc_f5_zero_page_indexed_x
+    ops[0xed] = sbc_ed_absolute
+    ops[0xfd] = sbc_fd_absolute_indexed_x
+    ops[0xf9] = sbc_f9_absolute_indexed_y
+    ops[0xe1] = sbc_e1_indexed_indirect
+    ops[0xf1] = sbc_f1_indirect_indexed
+    ops[0x85] = sta_85_zero_page
+    ops[0x95] = sta_95_zero_page_indexed_x
+    ops[0x8d] = sta_8d_absolute
+    ops[0x9d] = sta_9d_absolute_indexed_x
+    ops[0x99] = sta_99_absolute_indexed_y
+    ops[0x81] = sta_81_indexed_indirect
+    ops[0x91] = sta_91_indirect_indexed
+    ops[0x9a] = txs_9a
+    ops[0xba] = tsx_ba
+    ops[0x48] = pha_48
+    ops[0x68] = pla_68
+    ops[0x08] = php_08
+    ops[0x28] = plp_28
+    ops[0x86] = stx_86_zero_page
+    ops[0x96] = stx_96_zero_page_indexed_y
+    ops[0x8e] = stx_8e_absolute
+    ops[0x84] = sty_84_zero_page
+    ops[0x94] = sty_94_zero_page_indexed_x
+    ops[0x8c] = sty_8c_absolute
+
+    def tick():
+        nonlocal pc
+        pc = ops[fetch(pc)](pc)
+        return t
+
+    # Interrupts
+
+    def trigger_interrupt(new_pc):
+        # note that this is the only place pc is used outside of the main loop,
+        # as interrupts are the only exception to normal execution
+        nonlocal pc
+        nonlocal t, s
+        store(STACK_OFFSET+s, pc<<8)
+        s = (s-1) & 0xFF
+        store(STACK_OFFSET+s, pc&0xFF)
+        s = (s-1) & 0xFF
+        store(STACK_OFFSET+s, p|U)
+        s = (s-1) & 0xFF
+        t += 7
+        pc = new_pc
+
+    def trigger_nmi():
+        trigger_interrupt(fetch(0xFFFA)|(fetch(0xFFFB)<<8))
+
+    def trigger_reset():
+        trigger_interrupt(fetch(0xFFFC)|(fetch(0xFFFD)<<8))
+
+    def trigger_irq():
+        if p&I:
+            return pc  # interrupt disabled
+        trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
+
+    def inspect_regs():
+        return pc, s, a, x, y, p
+
+    return (
+        tick,
+        trigger_nmi,
+        trigger_reset,
+        trigger_irq,
+        inspect_regs
+    )
+
+def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
+    pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
+
+    def do_no_other_things(_):
+        return 0xFFFF  # arbitrarily large number of cycles
+    do_other_things = do_other_things or do_no_other_things
+
+    tick, trigger_nmi, trigger_reset, trigger_irq, insepect_regs = \
+        create_cpu_funcs(mapper.cpu_read, mapper.cpu_write, regs=regs, t=t, stop_on_brk=stop_on_brk)
+
+    interrupts = (trigger_nmi, trigger_reset, trigger_irq)
 
     # During normal execution, reset interrupt is called at power-on
     if regs is None:
-        _reset()
+        trigger_reset()
 
     try:
         while True:
@@ -2143,7 +2188,8 @@ def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_
                     log_line += ' ' * (48-len(log_line))
                     log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                     print(log_line)
-                pc = ops[mapper.cpu_read(pc)](pc)
+                t = tick()
+                pc, s, a, x, y, p = insepect_regs()
     except VMStop:
         pass  # clean exit
 
