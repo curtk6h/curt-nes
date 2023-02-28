@@ -211,7 +211,7 @@ class VMStop(Exception):
 class Mapper(object):
     mapper_num = 0
 
-    def __init__(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, ppu_read, ppu_write, apu_read, apu_write, nt_mirroring=NT_MIRRORING_VERTICAL):
+    def connect(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_read_reg, cpu_write_reg, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
         self.ram            = ram
         self.vram           = vram
         self.pals           = pals
@@ -222,8 +222,23 @@ class Mapper(object):
         self.chr_rom_banks  = chr_rom_banks
         self.chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
         self.chr_ram        = chr_ram
-        self._init_cpu_io(ppu_read, ppu_write, apu_read, apu_write)
+        self.cpu_read_reg  = cpu_read_reg
+        self.cpu_write_reg = cpu_write_reg
+        self.ppu_read_reg  = ppu_read_reg
+        self.ppu_write_reg = ppu_write_reg
+        self.apu_read_reg  = apu_read_reg
+        self.apu_write_reg = apu_write_reg
+
         self._init_ppu_io(nt_mirroring)
+
+        self._init_cpu_io(
+            cpu_read_reg,
+            cpu_write_reg,
+            ppu_read_reg,
+            ppu_write_reg,
+            apu_read_reg,
+            apu_write_reg
+        )
 
     def cpu_read(self, addr):
         return self.cpu_readers[addr](addr)
@@ -240,7 +255,7 @@ class Mapper(object):
     def set_nametable_mirroring(self, nt_mirroring):
         self._init_ppu_io(nt_mirroring)
 
-    def _init_cpu_io(self, ppu_read, ppu_write, apu_read, apu_write):
+    def _init_cpu_io(self, cpu_read_reg, cpu_write_reg, ppu_read, ppu_write, apu_read, apu_write):
         # Address range	Size	Device
         # $0000–$07FF	$0800	2 KB internal RAM
         # $0800–$0FFF	$0800	Mirrors of $0000–$07FF
@@ -508,139 +523,12 @@ mappers = {
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
+def _load_pal_from_file(pal_filepath):
+    with open(pal_filepath, 'rb') as pal_file:
+        pal_bytes = pal_file.read()
+        return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
+
 class PPU(object):
-    def __init__(self, pal_filepath=None):
-        self.oam = array.array('B', (0 for _ in range(0x100)))
-        self.reg_io_value = 0x00
-        self.reg_io_write_state = 0
-        self.ppu_status = 0x00
-        self.ppu_ctrl = 0x00
-        self.ppu_mask = 0x00
-        self.ppu_addr = 0x0000  # 15 bits
-        self.tmp_addr = 0x0000
-        self.oam_addr = 0x00
-        self.ppu_data = 0x00 # buffer for last ppudata read
-        self.fine_x_scroll = 0x0  # 3 bits
-        self.frame_num = 0
-        self.scanline_idx = 0
-        self.t = 0
-        self.mapper = None  # use setter
-        self.pals = array.array('B', (0 for _ in range(0x20)))
-        self.rgbs = PPU._load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
-        self._init_reg_io()
-
-    @staticmethod
-    def load_pal_from_file(pal_filepath):
-        with open(pal_filepath, 'rb') as pal_file:
-            pal_bytes = pal_file.read()
-            return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
-
-    def _init_reg_io(self):
-        def read_nothing():
-            pass
-        def read_ppu_status():
-            # VSO.....
-            self.reg_io_value ^= (self.reg_io_value^self.ppu_status) & 0xE0
-            self.ppu_status &= 0x7F  # clear vblank flag
-        def read_oam_data():
-            self.reg_io_value ^= (self.reg_io_value^self.oam[self.oam_addr])
-            self.oam_addr = (self.oam_addr+1) & 0xFF  # TODO: reads during v/forced blanking do not increment oamaddr
-        def read_ppu_data():
-            if self.ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
-                self.reg_io_value = self.mapper.ppu_read(self.ppu_addr)
-                self.ppu_data = self.mapper.ppu_read(self.ppu_addr-0x1000) # TODO: move to mapper?
-            else:
-                self.reg_io_value = self.ppu_data
-                self.ppu_data = self.mapper.ppu_read(self.ppu_addr)
-            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0x3FFF
-
-        def write_nothing():
-            pass
-        def write_ppu_ctrl():
-            if self.t < 30000:
-                return  # TODO: figure out reg_io_value / reg_io_write_state
-            gen_nmi_immediately = self.ppu_status & self.reg_io_value & ~self.ppu_ctrl & 0x80
-            self.ppu_ctrl = self.reg_io_value
-            # TODO: figure out if this really happens here or on copy to ppu_addr?
-            self.tmp_addr ^= (self.tmp_addr ^ (self.reg_io_value<<10)) & 0x0C00
-            if gen_nmi_immediately:
-                raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
-        def write_ppu_mask():
-            self.ppu_mask = self.reg_io_value
-        def write_oam_addr():
-            self.oam_addr = self.reg_io_value
-        def write_oam_data():
-            # TODO: ignore during rendering
-            # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
-            self.oam[self.oam_addr] = self.reg_io_value
-            self.oam_addr = (self.oam_addr + 1) & 0xFF
-        def write_ppu_scroll_0():
-            # ........ ...XXXXX (course X)
-            self.fine_x_scroll = self.reg_io_value & 0x07
-            self.tmp_addr ^= (self.tmp_addr^(self.reg_io_value>>3)) & 0x001F
-        def write_ppu_scroll_1():
-            # .yyy..YY YYY..... (fine y, course Y)
-            self.tmp_addr ^= (self.tmp_addr^((self.reg_io_value<<12)|(self.reg_io_value<<2))) & 0x73E0
-        def write_ppu_addr_0():
-            # .0AAAAAA ........ (address high 6 bits + clear 14th bit)
-            self.tmp_addr ^= (self.tmp_addr^((self.reg_io_value&0x3F)<<8)) & 0x7F00
-        def write_ppu_addr_1():
-            # ........ AAAAAAAA (address low 8 bits)
-            self.tmp_addr ^= (self.tmp_addr^self.reg_io_value) & 0x00FF
-            self.ppu_addr = self.tmp_addr
-        def write_ppu_data():
-            self.mapper.ppu_write(self.ppu_addr, self.reg_io_value)
-            self.ppu_addr = (self.ppu_addr + PPU_ADDR_INCREMENTS[self.ppu_ctrl&0x04]) & 0x3FFF
-
-        self.reg_readers = [
-            read_nothing,
-            read_nothing,
-            read_ppu_status,
-            read_nothing,
-            read_oam_data,
-            read_nothing,
-            read_nothing,
-            read_ppu_data
-        ]
-
-        self.reg_writers = [
-            # first write
-            write_ppu_ctrl,
-            write_ppu_mask,
-            write_nothing,
-            write_oam_addr,
-            write_oam_data,
-            write_ppu_scroll_0,
-            write_ppu_addr_0,
-            write_ppu_data,
-            # second write
-            write_ppu_ctrl,
-            write_ppu_mask,
-            write_nothing,
-            write_oam_addr,
-            write_oam_data,
-            write_ppu_scroll_1,
-            write_ppu_addr_1,
-            write_ppu_data
-        ]
-
-    def set_mapper(self, mapper):
-        self.mapper = mapper
-
-    def read_reg(self, reg_idx):
-        self.reg_readers[reg_idx]()
-        self.reg_io_write_state = 0
-        return self.reg_io_value
-
-    def write_reg(self, reg_idx, value):
-        self.reg_io_value = value
-        self.reg_writers[reg_idx+self.reg_io_write_state]()
-        self.reg_io_write_state ^= 8
-
-    def write_oam(self, value):
-        self.oam[self.oam_addr&0xFF] = value
-        self.oam_addr += 1
-
     def render(self, t_elapsed):
         pixel_idx = 0
         screen = array.array('B', (0 for _ in range(256*240)))
@@ -753,6 +641,174 @@ class PPU(object):
     def tick(self):
         self.scanline_funcs[self.scanline_idx][self.t]()
 
+def create_ppu_funcs(
+    fetch,
+    store,
+    reg_io_value=0x00,
+    reg_io_write_state=0,
+    ppu_status=0x00,
+    ppu_ctrl=0x00,
+    ppu_mask=0x00,
+    ppu_addr=0x0000,
+    tmp_addr=0x0000,
+    oam_addr=0x00,
+    ppu_data=0x00, # buffer for last ppudata read
+    fine_x_scroll=0x0,
+    t=0,
+    pal_filepath=DEFAULT_PAL_FILEPATH
+):
+    """
+    The PPU is represented as a tuple of functions:
+    (
+        read_reg,
+        write_reg,
+        write_oam,
+        inspect_regs
+    )
+    """
+    oam = array.array('B', (0 for _ in range(0x100)))
+    frame_num = 0
+    scanline_idx = 0
+    pals = array.array('B', (0 for _ in range(0x20)))
+    rgbs = _load_pal_from_file(pal_filepath)
+
+    def read_nothing():
+        pass
+    def read_ppu_status():
+        nonlocal reg_io_value, ppu_status
+        # VSO.....
+        reg_io_value ^= (reg_io_value^ppu_status) & 0xE0
+        ppu_status &= 0x7F  # clear vblank flag
+    def read_oam_data():
+        nonlocal reg_io_value, oam_addr
+        reg_io_value ^= (reg_io_value^oam[oam_addr])
+        oam_addr = (oam_addr+1) & 0xFF  # TODO: reads during v/forced blanking do not increment oamaddr
+    def read_ppu_data():
+        nonlocal reg_io_value, ppu_data, ppu_addr
+        if ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
+            reg_io_value = fetch(ppu_addr)
+            ppu_data = fetch(ppu_addr-0x1000) # TODO: move to mapper?
+        else:
+            reg_io_value = ppu_data
+            ppu_data = fetch(ppu_addr)
+        ppu_addr = (ppu_addr + PPU_ADDR_INCREMENTS[ppu_ctrl&0x04]) & 0x3FFF
+
+    def write_nothing():
+        pass
+    def write_ppu_ctrl():
+        nonlocal ppu_ctrl, tmp_addr
+        if t < 30000:
+            return  # TODO: figure out reg_io_value / reg_io_write_state
+        gen_nmi_immediately = ppu_status & reg_io_value & ~ppu_ctrl & 0x80
+        ppu_ctrl = reg_io_value
+        # TODO: figure out if this really happens here or on copy to ppu_addr?
+        tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00
+        if gen_nmi_immediately:
+            raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
+    def write_ppu_mask():
+        nonlocal ppu_mask
+        ppu_mask = reg_io_value
+    def write_oam_addr():
+        nonlocal oam_addr
+        oam_addr = reg_io_value
+    def write_oam_data():
+        nonlocal oam_addr
+        # TODO: ignore during rendering
+        # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
+        oam[oam_addr] = reg_io_value
+        oam_addr = (oam_addr + 1) & 0xFF
+    def write_ppu_scroll_0():
+        nonlocal fine_x_scroll, tmp_addr
+        # ........ ...XXXXX (course X)
+        fine_x_scroll = reg_io_value & 0x07
+        tmp_addr ^= (tmp_addr^(reg_io_value>>3)) & 0x001F
+    def write_ppu_scroll_1():
+        nonlocal tmp_addr
+        # .yyy..YY YYY..... (fine y, course Y)
+        tmp_addr ^= (tmp_addr^((reg_io_value<<12)|(reg_io_value<<2))) & 0x73E0
+    def write_ppu_addr_0():
+        nonlocal tmp_addr
+        # .0AAAAAA ........ (address high 6 bits + clear 14th bit)
+        tmp_addr ^= (tmp_addr^((reg_io_value&0x3F)<<8)) & 0x7F00
+    def write_ppu_addr_1():
+        nonlocal tmp_addr, ppu_addr
+        # ........ AAAAAAAA (address low 8 bits)
+        tmp_addr ^= (tmp_addr^reg_io_value) & 0x00FF
+        ppu_addr = tmp_addr
+    def write_ppu_data():
+        nonlocal ppu_addr
+        store(ppu_addr, reg_io_value)
+        ppu_addr = (ppu_addr + PPU_ADDR_INCREMENTS[ppu_ctrl&0x04]) & 0x3FFF
+
+    reg_readers = [
+        read_nothing,
+        read_nothing,
+        read_ppu_status,
+        read_nothing,
+        read_oam_data,
+        read_nothing,
+        read_nothing,
+        read_ppu_data
+    ]
+
+    reg_writers = [
+        # first write
+        write_ppu_ctrl,
+        write_ppu_mask,
+        write_nothing,
+        write_oam_addr,
+        write_oam_data,
+        write_ppu_scroll_0,
+        write_ppu_addr_0,
+        write_ppu_data,
+        # second write
+        write_ppu_ctrl,
+        write_ppu_mask,
+        write_nothing,
+        write_oam_addr,
+        write_oam_data,
+        write_ppu_scroll_1,
+        write_ppu_addr_1,
+        write_ppu_data
+    ]
+
+    def read_reg(reg_idx):
+        nonlocal reg_io_write_state
+        reg_readers[reg_idx]()
+        reg_io_write_state = 0
+        return reg_io_value
+
+    def write_reg(reg_idx, value):
+        nonlocal reg_io_value, reg_io_write_state
+        reg_io_value = value
+        reg_writers[reg_idx+reg_io_write_state]()
+        reg_io_write_state ^= 8
+
+    def write_oam(value):
+        nonlocal oam_addr
+        oam[oam_addr&0xFF] = value
+        oam_addr += 1
+
+    return (
+        read_reg,
+        write_reg,
+        write_oam,
+        lambda: pals,  # return internal pals storage,
+        lambda: dict(  # return internal regs / mem for testing purposes
+            oam=oam,
+            reg_io_value=reg_io_value,
+            reg_io_write_state=reg_io_write_state,
+            ppu_status=ppu_status,
+            ppu_ctrl=ppu_ctrl,
+            ppu_mask=ppu_mask,
+            ppu_addr=ppu_addr,
+            tmp_addr=tmp_addr,
+            oam_addr=oam_addr,
+            ppu_data=ppu_data,
+            fine_x_scroll=fine_x_scroll
+        )
+    )
+
 def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
     """
     The CPU is represented as a tuple of functions:
@@ -761,7 +817,7 @@ def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
         trigger_nmi,
         trigger_reset,
         trigger_irq,
-        inspect_registers
+        inspect_regs
     )
     """
 
@@ -2146,15 +2202,12 @@ def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
             return pc  # interrupt disabled
         trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
 
-    def inspect_regs():
-        return pc, s, a, x, y, p
-
     return (
         tick,
         trigger_nmi,
         trigger_reset,
         trigger_irq,
-        inspect_regs
+        lambda: (pc, s, a, x, y, p)
     )
 
 def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
@@ -2200,7 +2253,7 @@ class Cart(object):
         self,
         prg_rom_banks,
         chr_rom_banks,
-        mapper_cls=None,
+        mapper=None,
         prg_ram_size=0,
         chr_ram_size=0,
         trainer=None,
@@ -2219,7 +2272,7 @@ class Cart(object):
         self.chr_rom_banks = chr_rom_banks
         self.prg_ram = array.array('B', (0 for _ in range(prg_ram_size)))
         self.chr_ram = array.array('B', (0 for _ in range(chr_ram_size)))
-        self.mapper_cls = mapper_cls or Mapper
+        self.mapper = mapper or Mapper()
         self.trainer = trainer
         self.hard_wired_nametable_mirroring_type = hard_wired_nametable_mirroring_type
         self.has_non_volatile_memory = has_non_volatile_memory  # redundant to prg-nvram once it's adddeds
@@ -2290,14 +2343,14 @@ class Cart(object):
 
         # Instantiate mapper
         try:
-            mapper_cls = mappers[mapper_num]
+            mapper = mappers[mapper_num]()
         except IndexError:
             raise ValueError('Memory mapper {} not supported'.format(mapper_num))
 
         return Cart(
             prg_rom_banks,
             chr_rom_banks,
-            mapper_cls=mapper_cls,
+            mapper=mapper,
             prg_ram_size=prg_ram_size,
             chr_ram_size=chr_ram_size,
             trainer=trainer,
@@ -2324,7 +2377,7 @@ class Cart(object):
         print(f'512-byte trainer: {self.trainer is not None}')
         print(f'Hard-wired nametable mirroring type: {mirroring_types[self.hard_wired_nametable_mirroring_type]}')
         print(f'Hard-wired four-screen mode: {self.hard_wired_four_screen_mode}')
-        print(f'Memory mapper: {mapper_names[self.mapper_cls.mapper_num]} ({self.mapper_cls.mapper_num})')
+        print(f'Memory mapper: {mapper_names[self.mapper.mapper_num]} ({self.mapper.mapper_num})')
         print(f'iNES 2.0 identifier: {self.has_ines_2_0_identifier}')
         print(f'Console type: {console_types[self.console_type]}')
         print(f'PRG-RAM size: {self.prg_ram_size}')
@@ -2334,12 +2387,8 @@ class Cart(object):
         print(f'Number of miscellaneous ROMs: {self.num_misc_roms}')
         print(f'Default expansion device: {self.default_expansion_device}')
 
-    def connect(self, ram, vram, pals, ppu_read, ppu_write):
-        def apu_read(addr):
-            return 0
-        def apu_write(addr, value):
-            pass
-        self.mapper = self.mapper_cls(
+    def connect(self, ram, vram, pals, cpu_read_reg, cpu_write_reg, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
+        self.mapper.connect(
             ram,
             vram,
             pals,
@@ -2347,14 +2396,17 @@ class Cart(object):
             self.prg_ram,
             self.chr_rom_banks,
             self.chr_ram,
-            ppu_read,
-            ppu_write,
-            apu_read,
-            apu_write,
+            cpu_read_reg,
+            cpu_write_reg,
+            ppu_read_reg,
+            ppu_write_reg,
+            apu_read_reg,
+            apu_write_reg,
             [
                 NT_MIRRORING_HORIZONTAL,
                 NT_MIRRORING_VERTICAL
-            ][self.hard_wired_nametable_mirroring_type])
+            ][self.hard_wired_nametable_mirroring_type]
+        )
 
 class NES(object):
     def __init__(self, cart, regs=None, t=0, print_cpu_log=False, pal_filepath=None):
@@ -2363,13 +2415,22 @@ class NES(object):
         self.t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x800)))
-        self.ppu = PPU(pal_filepath=pal_filepath)
+        cpu_read_reg, cpu_write_reg = create_cpu_funcs(self.mapper.cpu_read, self.mapper.cpu_write, t=t, stop_on_brk=False)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, pals = create_ppu_funcs(self.mapper.ppu_read, self.mapper.ppu_write, pal_filepath=pal_filepath)
+        def apu_read_reg(addr):
+            return 0
+        def apu_write_reg(addr, value):
+            pass
         self.mapper = cart.connect(
             self.ram,
             self.vram,
-            self.ppu.pals,
-            self.ppu.cpu_read,
-            self.ppu.cpu_read)
+            pals, # TODO: figure this out
+            cpu_read_reg,
+            cpu_write_reg,
+            ppu_read_reg,
+            ppu_write_reg,
+            apu_read_reg,
+            apu_write_reg)
         self.print_cpu_log = print_cpu_log
 
     def play_cart(self):
