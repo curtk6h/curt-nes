@@ -217,17 +217,17 @@ class Mapper(object):
         self.pals           = pals
         self.prg_rom_banks  = prg_rom_banks
         self.prg_rom_bank_0 = prg_rom_banks[0]
-        self.prg_rom_bank_1 = prg_rom_banks[1]
+        self.prg_rom_bank_1 = prg_rom_banks[1] if len(prg_rom_banks) > 1 else prg_rom_banks[0]
         self.prg_ram        = prg_ram
         self.chr_rom_banks  = chr_rom_banks
         self.chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
         self.chr_ram        = chr_ram
-        self.cpu_read_reg  = cpu_read_reg
-        self.cpu_write_reg = cpu_write_reg
-        self.ppu_read_reg  = ppu_read_reg
-        self.ppu_write_reg = ppu_write_reg
-        self.apu_read_reg  = apu_read_reg
-        self.apu_write_reg = apu_write_reg
+        self.cpu_read_reg   = cpu_read_reg
+        self.cpu_write_reg  = cpu_write_reg
+        self.ppu_read_reg   = ppu_read_reg
+        self.ppu_write_reg  = ppu_write_reg
+        self.apu_read_reg   = apu_read_reg
+        self.apu_write_reg  = apu_write_reg
 
         self._init_ppu_io(nt_mirroring)
 
@@ -237,8 +237,7 @@ class Mapper(object):
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
-            apu_write_reg
-        )
+            apu_write_reg)
 
     def cpu_read(self, addr):
         return self.cpu_readers[addr](addr)
@@ -655,7 +654,7 @@ def create_ppu_funcs(
     ppu_data=0x00, # buffer for last ppudata read
     fine_x_scroll=0x0,
     t=0,
-    pal_filepath=DEFAULT_PAL_FILEPATH
+    pal_filepath=None
 ):
     """
     The PPU is represented as a tuple of functions:
@@ -663,6 +662,7 @@ def create_ppu_funcs(
         read_reg,
         write_reg,
         write_oam,
+        pals,
         inspect_regs
     )
     """
@@ -670,7 +670,7 @@ def create_ppu_funcs(
     frame_num = 0
     scanline_idx = 0
     pals = array.array('B', (0 for _ in range(0x20)))
-    rgbs = _load_pal_from_file(pal_filepath)
+    rgbs = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
 
     def read_nothing():
         pass
@@ -2210,44 +2210,6 @@ def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
         lambda: (pc, s, a, x, y, p)
     )
 
-def play(mapper, regs=None, t=0, do_other_things=None, stop_on_brk=False, print_cpu_log=False):
-    pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
-
-    def do_no_other_things(_):
-        return 0xFFFF  # arbitrarily large number of cycles
-    do_other_things = do_other_things or do_no_other_things
-
-    tick, trigger_nmi, trigger_reset, trigger_irq, insepect_regs = \
-        create_cpu_funcs(mapper.cpu_read, mapper.cpu_write, regs=regs, t=t, stop_on_brk=stop_on_brk)
-
-    interrupts = (trigger_nmi, trigger_reset, trigger_irq)
-
-    # During normal execution, reset interrupt is called at power-on
-    if regs is None:
-        trigger_reset()
-
-    try:
-        while True:
-            next_t = t + do_other_things(interrupts)  # such as drawing a pixel, scanline, frame (if not directly on screen, in a memory buffer)
-            while t < next_t:  # catch up with external system(s)
-                if print_cpu_log:
-                    op = mapper.cpu_read(pc)
-                    num_operands = INSTRUCTION_BYTES[op]
-                    operands = [(mapper.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
-                    operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
-                    addr_mode = INSTRUCTION_ADDR_MODES[op]
-                    addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(mapper, pc, operands)}'
-                    log_line += ' ' * (48-len(log_line))
-                    log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                    print(log_line)
-                t = tick()
-                pc, s, a, x, y, p = insepect_regs()
-    except VMStop:
-        pass  # clean exit
-
-    return (pc, s, a, x, y, p), t
-
 class Cart(object):
     def __init__(
         self,
@@ -2279,7 +2241,6 @@ class Cart(object):
         self.hard_wired_four_screen_mode = hard_wired_four_screen_mode
         self.has_ines_2_0_identifier = has_ines_2_0_identifier
         self.console_type = console_type
-        self.prg_ram_size = prg_ram_size
         self.timing_mode = timing_mode
         self.more_console_type_info = more_console_type_info
         self.num_misc_roms = num_misc_roms
@@ -2322,8 +2283,8 @@ class Cart(object):
         mapper_num = ((control_byte_low>>4)&0xF) | (control_byte_high&0xF0)
         has_ines_2_0_identifier = bool(((control_byte_high>>2)&3)==0x10)
         console_type = control_byte_high & 3
-        prg_ram_size = 64 << prg_ram_shift
-        chr_ram_size = 64 << chr_ram_shift
+        prg_ram_size = 0 # 64 << prg_ram_shift
+        chr_ram_size = 0 # 64 << chr_ram_shift
 
         # Extract trainer
         if has_trainer:
@@ -2380,8 +2341,8 @@ class Cart(object):
         print(f'Memory mapper: {mapper_names[self.mapper.mapper_num]} ({self.mapper.mapper_num})')
         print(f'iNES 2.0 identifier: {self.has_ines_2_0_identifier}')
         print(f'Console type: {console_types[self.console_type]}')
-        print(f'PRG-RAM size: {self.prg_ram_size}')
-        print(f'CHR-RAM size: {self.chr_ram_size}')
+        print(f'PRG-RAM size: {len(self.prg_ram)}')
+        print(f'CHR-RAM size: {len(self.chr_ram)}')
         print(f'CPU/PPU Timing: {timing_modes[self.timing_mode]}')
         print(f'More console type info: {self.more_console_type_info}')
         print(f'Number of miscellaneous ROMs: {self.num_misc_roms}')
@@ -2409,32 +2370,73 @@ class Cart(object):
         )
 
 class NES(object):
-    def __init__(self, cart, regs=None, t=0, print_cpu_log=False, pal_filepath=None):
+    def __init__(self, cart, cpu_regs=None, t=0, print_cpu_log=False, pal_filepath=None):
         self.cart = cart
-        self.regs = regs
-        self.t = t
+        self.cpu_regs = cpu_regs
+        self.initial_t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x800)))
-        cpu_read_reg, cpu_write_reg = create_cpu_funcs(self.mapper.cpu_read, self.mapper.cpu_write, t=t, stop_on_brk=False)
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, pals = create_ppu_funcs(self.mapper.ppu_read, self.mapper.ppu_write, pal_filepath=pal_filepath)
+        self.print_cpu_log = print_cpu_log
+        self.cpu_tick,\
+        self.cpu_trigger_nmi,\
+        self.cpu_trigger_reset,\
+        self.cpu_trigger_irq,\
+        self.cpu_inspect_regs = create_cpu_funcs(
+            cart.mapper.cpu_read,
+            cart.mapper.cpu_write,
+            regs=cpu_regs,
+            t=t,
+            stop_on_brk=False)
+        self.ppu_read_reg,\
+        self.ppu_write_reg,\
+        self.ppu_write_oam,\
+        self.ppu_pals,\
+        self.ppu_inspect_regs = create_ppu_funcs(
+            cart.mapper.ppu_read,
+            cart.mapper.ppu_write,
+            pal_filepath=pal_filepath)
+        def cpu_read_reg(addr):
+            return 0
+        def cpu_write_reg(addr, value):
+            pass
         def apu_read_reg(addr):
             return 0
         def apu_write_reg(addr, value):
             pass
-        self.mapper = cart.connect(
+        cart.connect(
             self.ram,
             self.vram,
-            pals, # TODO: figure this out
+            self.ppu_pals(),
             cpu_read_reg,
             cpu_write_reg,
-            ppu_read_reg,
-            ppu_write_reg,
+            self.ppu_read_reg,
+            self.ppu_write_reg,
             apu_read_reg,
             apu_write_reg)
-        self.print_cpu_log = print_cpu_log
 
-    def play_cart(self):
-        self.regs, self.t = play(self.mapper, self.regs, self.t, print_cpu_log=self.print_cpu_log)
+    def play(self):
+        t = self.initial_t
+        try:
+            if self.print_cpu_log:
+                while True:
+                    pc, s, a, x, y, p = self.cpu_inspect_regs()
+                    op = self.cart.mapper.cpu_read(pc)
+                    num_operands = INSTRUCTION_BYTES[op]
+                    operands = [(self.cart.mapper.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                    operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                    addr_mode = INSTRUCTION_ADDR_MODES[op]
+                    addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cart.mapper, pc, operands)}'
+                    log_line += ' ' * (48-len(log_line))
+                    log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
+                    print(log_line)
+                    t = self.cpu_tick()
+            else:
+                self.cpu_trigger_reset()
+                while True:
+                    t = self.cpu_tick()
+        except VMStop:
+            return t  # clean exit
 
 if __name__ == "__main__":
     import argparse
@@ -2452,5 +2454,5 @@ if __name__ == "__main__":
         exit(0)
 
     # Currently overriding registers, time for nestest.nes!
-    nes = NES(cart, regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log, pal_filepath=args.pal)
-    nes.play_cart()
+    nes = NES(cart, cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log, pal_filepath=args.pal)
+    nes.play()
