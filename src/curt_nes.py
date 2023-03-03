@@ -205,6 +205,11 @@ NT_MIRRORING_VERTICAL = 1
 NT_MIRRORING_SINGLE_SCREEN = 3
 NT_MIRRORING_FOUR_SCREEN = 4
 
+CONSOLE_FLAVOR_NES = 0
+CONSOLE_FLAVOR_VS_SYSTEM = 1
+CONSOLE_FLAVOR_PLAYCHOICE_10 = 2
+CONSOLE_FLAVOR_OTHER = 3
+
 class VMStop(Exception):
     pass
 
@@ -466,9 +471,6 @@ class Mapper(object):
         else:
             raise ValueError(f'Nametable mirroring {nt_mirroring} not supported')
 
-        # Not sure what the default rules for "no mapper" should be (TODO: figure it out!);
-        # this assumes that either one of CHR-ROM or CHR-RAM is present at a time 
-        # and other configurations require a custom mapper
         if self.chr_ram and self.chr_rom_bank:
             raise ValueError('CHR-ROM/RAM configuration not supported by default mapper (both are present)')
 
@@ -2215,92 +2217,90 @@ class Cart(object):
         self,
         prg_rom_banks,
         chr_rom_banks,
+        prg_ram_size,
+        chr_ram_size,
+        trainer,
         mapper=None,
-        prg_ram_size=0,
-        chr_ram_size=0,
-        trainer=None,
-        has_non_volatile_memory=None,
-        hard_wired_nametable_mirroring_type=None,
-        hard_wired_four_screen_mode=None,
-        has_ines_2_0_identifier=None,
-        console_type=None,
-        timing_mode=None,
-        more_console_type_info=None,
-        num_misc_roms=None,
-        default_expansion_device=None,
+        nt_mirroring=NT_MIRRORING_HORIZONTAL,
+        has_non_volatile_memory=False,
+        console_flavor=CONSOLE_FLAVOR_NES,
         cart_filename=None
     ):
         self.prg_rom_banks = prg_rom_banks
         self.chr_rom_banks = chr_rom_banks
         self.prg_ram = array.array('B', (0 for _ in range(prg_ram_size)))
         self.chr_ram = array.array('B', (0 for _ in range(chr_ram_size)))
-        self.mapper = mapper or Mapper()
         self.trainer = trainer
-        self.hard_wired_nametable_mirroring_type = hard_wired_nametable_mirroring_type
+        self.mapper = mapper or Mapper()
+        self.nt_mirroring = nt_mirroring
         self.has_non_volatile_memory = has_non_volatile_memory  # redundant to prg-nvram once it's adddeds
-        self.hard_wired_four_screen_mode = hard_wired_four_screen_mode
-        self.has_ines_2_0_identifier = has_ines_2_0_identifier
-        self.console_type = console_type
-        self.timing_mode = timing_mode
-        self.more_console_type_info = more_console_type_info
-        self.num_misc_roms = num_misc_roms
-        self.default_expansion_device = default_expansion_device
+        self.console_flavor = console_flavor
         self.cart_filename = cart_filename
         
     @staticmethod
-    def from_ines(ines_filepath):
+    def from_file(cart_filepath):
+        with open(cart_filepath, 'rb') as cart_file:
+            return Cart.from_nes2_or_ines_file(
+                cart_file,
+                cart_options={'cart_filename': os.path.basename(cart_filepath)}
+            )
+
+    @staticmethod
+    def from_nes2_or_ines_file(nes2_file, cart_options={}):
+        header = nes2_file.read(0x10)
+        
+        # byte 0 - 3
+        assert(header[0x0:0x4] == b'NES\x1A')
+        # byte 4 - 5
+        num_prg_rom_banks           = header[0x4]
+        num_chr_rom_banks           = header[0x5]
+        # byte 6
+        mapper_num                  = header[0x6] >> 4
+        use_four_screen_mirroring   = header[0x6] & 0x08 == 0x08 # provide four-screen VRAM (precedence over v/h mirroring)
+        has_trainer                 = header[0x6] & 0x04 == 0x04
+        has_non_volatile_memory     = header[0x6] & 0x02 == 0x02 # battery-backed PRG RAM ($6000-7FFF) or other persistent memory
+        use_vertical_mirroring      = header[0x6] & 0x01 == 0x01 # otherwise uses horizontal
+        # byte 7
+        mapper_num                 |= header[0x7] & 0xF0
+        is_nes2_format              = header[0x7] & 0x0C == 0x08
+        console_flavor              = header[0x7] & 0x03
+
+        if use_four_screen_mirroring:
+            nt_mirroring = NT_MIRRORING_FOUR_SCREEN
+        elif use_vertical_mirroring:
+            nt_mirroring = NT_MIRRORING_VERTICAL
+        else:
+            nt_mirroring = NT_MIRRORING_HORIZONTAL 
+
+        cart_options = dict(
+            cart_options,
+            nt_mirroring=nt_mirroring,
+            has_non_volatile_memory=has_non_volatile_memory,
+            console_flavor=console_flavor
+        )
+
+        if is_nes2_format:
+            return Cart.from_nes2_file(nes2_file, header, num_prg_rom_banks, num_chr_rom_banks, has_trainer, mapper_num, cart_options)
+        else:
+            return Cart.from_ines_file(nes2_file, header, num_prg_rom_banks, num_chr_rom_banks, has_trainer, mapper_num, cart_options)
+
+    @staticmethod
+    def from_nes2_file(nes2_file, header, num_prg_rom_banks, num_chr_rom_banks, has_trainer, mapper_num, cart_options):
         # See: https://www.nesdev.org/wiki/NES_2.0
-        ines_file = open(ines_filepath, 'rb')
-        header = ines_file.read(0x10)
+        raise NotImplementedError
 
-        # Extract header bytes upfront, clearing unused bits (for sanity)
-        identification_string    = header[0x0:0x4]
-        num_prg_rom_banks_low    = header[0x4]
-        num_chr_rom_banks_low    = header[0x5]
-        control_byte_low         = header[0x6]
-        control_byte_high        = header[0x7]
-        submapper                = header[0x8]
-        num_rom_banks_high       = header[0x9]
-        prg_ram_shift            = header[0xA] & 0xF # TODO: PRG-NVRAM
-        chr_ram_shift            = header[0xB] & 0xF # TODO: CHR-NVRAM
-        timing_mode              = header[0xC] & 0x3
-        more_console_type_info   = header[0xD]
-        num_misc_roms            = header[0xE] & 0x3
-        default_expansion_device = header[0xF] & 0x3F
-
-        # Validate file format is iNES
-        assert(identification_string == b'NES\x1A')
-        assert((num_rom_banks_high&0xF) != 0xF)    # TODO: handle exponent-multiplier notation
-        assert((num_rom_banks_high&0xF0) != 0xF0)  # TODO: handle exponent-multiplier notation
-
-        # Map header bytes to actual full-fledged values
-        num_prg_rom_banks = num_prg_rom_banks_low | ((num_rom_banks_high&0xF)<<8)
-        num_chr_rom_banks = num_chr_rom_banks_low | ((num_rom_banks_high&0xF0)<<4)
-        hard_wired_nametable_mirroring_type = control_byte_low & 1
-        has_non_volatile_memory = bool((control_byte_low>>1)&1)
-        has_trainer = (control_byte_low>>2) & 1
-        hard_wired_four_screen_mode = (control_byte_low>>3) & 1
-        mapper_num = ((control_byte_low>>4)&0xF) | (control_byte_high&0xF0)
-        has_ines_2_0_identifier = bool(((control_byte_high>>2)&3)==0x10)
-        console_type = control_byte_high & 3
-        prg_ram_size = 0 # 64 << prg_ram_shift
-        chr_ram_size = 0 # 64 << chr_ram_shift
+    @staticmethod
+    def from_ines_file(ines_file, header, num_prg_rom_banks, num_chr_rom_banks, has_trainer, mapper_num, cart_options):
+        # See: https://www.nesdev.org/wiki/INES
 
         # Extract trainer
-        if has_trainer:
-            trainer = ines_file.read(0x200)
-        else:
-            trainer = None
+        trainer = ines_file.read(0x200) if has_trainer else None
 
         # Extract 16 KB PRG-ROM banks
-        prg_rom_banks = []
-        for _ in range(num_prg_rom_banks):
-            prg_rom_banks.append(ines_file.read(0x4000))
+        prg_rom_banks = [ines_file.read(0x4000) for _ in range(num_prg_rom_banks)]
 
         # Extract  8 KB CHR-ROM banks
-        chr_rom_banks = []
-        for _ in range(num_chr_rom_banks):
-            chr_rom_banks.append(ines_file.read(0x2000))
+        chr_rom_banks = [ines_file.read(0x2000) for _ in range(num_chr_rom_banks)]
 
         # Instantiate mapper
         try:
@@ -2311,43 +2311,27 @@ class Cart(object):
         return Cart(
             prg_rom_banks,
             chr_rom_banks,
+            0x2000,
+            0 if chr_rom_banks else 0x2000,
+            trainer,
             mapper=mapper,
-            prg_ram_size=prg_ram_size,
-            chr_ram_size=chr_ram_size,
-            trainer=trainer,
-            has_non_volatile_memory=has_non_volatile_memory,
-            hard_wired_nametable_mirroring_type=hard_wired_nametable_mirroring_type,
-            hard_wired_four_screen_mode=hard_wired_four_screen_mode,
-            has_ines_2_0_identifier=has_ines_2_0_identifier,
-            console_type=console_type,
-            timing_mode=timing_mode,
-            more_console_type_info=more_console_type_info,
-            num_misc_roms=num_misc_roms,
-            default_expansion_device=default_expansion_device,
-            cart_filename=os.path.basename(ines_filepath)
+            **cart_options
         )
 
     def print_config(self):
-        mirroring_types = ['Horizontal or mapper-controlled', 'Vertical']
+        nt_mirroring_descs = ['Horizontal or mapper-controlled', 'Vertical', 'Four Screen']
         mapper_names = {0: 'NROM, no mapper', 1: 'Nintendo MMC1', 2: 'UNROM switch', 3: 'CNROM switch', 4: 'Nintendo MMC3', 5: 'Nintendo MMC5', 6: 'FFE F4xxx', 7: 'AOROM switch', 8: 'FFE F3xxx', 9: 'Nintendo MMC2', 10: 'Nintendo MMC4', 11: 'ColorDreams chip', 12: 'FFE F6xxx', 15: '100-in-1 switch', 16: 'Bandai chip', 17: 'FFE F8xxx', 18: 'Jaleco SS8806 chip', 19: 'Namcot 106 chip', 20: 'Nintendo Disk System', 21: 'Konami VRC4a', 22: 'Konami VRC2a', 23: 'Konami VRC2a', 24: 'Konami VRC6', 25: 'Konami VRC4b', 32: 'Irem G-101 chip', 33: 'Taito TC0190/TC0350', 34: '32 KB ROM switch', 64: 'Tengen RAMBO-1 chip', 65: 'Irem H-3001 chip', 66: 'GNROM switch', 67: 'SunSoft3 chip', 68: 'SunSoft4 chip', 69: 'SunSoft5 FME-7 chip', 71: 'Camerica chip', 78: 'Irem 74HC161/32-based', 91: 'Pirate HK-SF3 chip'}
-        console_types = ['Nintendo Entertainment System/Family Computer', 'Nintendo Vs. System', 'Nintendo Playchoice 10', 'Extended Console Type']
-        timing_modes = ['RP2C02 ("NTSC NES")', 'RP2C07 ("Licensed PAL NES")', 'Multiple-region', 'UMC 6527P ("Dendy")']
+        console_flavors = ['Nintendo Entertainment System/Family Computer', 'Nintendo Vs. System', 'Nintendo Playchoice 10', 'Extended Console Type']
         print(f'Number of 16 KB PRG-ROM banks: {len(self.prg_rom_banks)}')
         print(f'Number of 8 KB CHR-ROM banks: {len(self.chr_rom_banks)}')
-        print(f'"Battery" and other non-volatile memory: {self.has_non_volatile_memory}')
-        print(f'512-byte trainer: {self.trainer is not None}')
-        print(f'Hard-wired nametable mirroring type: {mirroring_types[self.hard_wired_nametable_mirroring_type]}')
-        print(f'Hard-wired four-screen mode: {self.hard_wired_four_screen_mode}')
+        print(f'Number PRG-RAM bytes: {len(self.prg_ram)}')
+        print(f'Number CHR-RAM bytes: {len(self.chr_ram)}')
         print(f'Memory mapper: {mapper_names[self.mapper.mapper_num]} ({self.mapper.mapper_num})')
-        print(f'iNES 2.0 identifier: {self.has_ines_2_0_identifier}')
-        print(f'Console type: {console_types[self.console_type]}')
-        print(f'PRG-RAM size: {len(self.prg_ram)}')
-        print(f'CHR-RAM size: {len(self.chr_ram)}')
-        print(f'CPU/PPU Timing: {timing_modes[self.timing_mode]}')
-        print(f'More console type info: {self.more_console_type_info}')
-        print(f'Number of miscellaneous ROMs: {self.num_misc_roms}')
-        print(f'Default expansion device: {self.default_expansion_device}')
-
+        print(f'Has "battery" or other non-volatile memory: {self.has_non_volatile_memory}')
+        print(f'Has 512-byte trainer: {self.trainer is not None}')
+        print(f'Nametable mirroring: {nt_mirroring_descs[self.nt_mirroring]}')
+        print(f'Console flavor: {console_flavors[self.console_flavor]}')
+        
     def connect(self, ram, vram, pals, cpu_read_reg, cpu_write_reg, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
         self.mapper.connect(
             ram,
@@ -2363,10 +2347,7 @@ class Cart(object):
             ppu_write_reg,
             apu_read_reg,
             apu_write_reg,
-            [
-                NT_MIRRORING_HORIZONTAL,
-                NT_MIRRORING_VERTICAL
-            ][self.hard_wired_nametable_mirroring_type]
+            self.nt_mirroring
         )
 
 class NES(object):
@@ -2375,7 +2356,7 @@ class NES(object):
         self.cpu_regs = cpu_regs
         self.initial_t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
-        self.vram = array.array('B', (0 for _ in range(0x800)))
+        self.vram = array.array('B', (0 for _ in range(0x1000 if cart.nt_mirroring == NT_MIRRORING_FOUR_SCREEN else 0x800)))
         self.print_cpu_log = print_cpu_log
         self.cpu_tick,\
         self.cpu_trigger_nmi,\
@@ -2447,12 +2428,18 @@ if __name__ == "__main__":
     parser.add_argument('--pal')
     args = parser.parse_args()
 
-    cart = Cart.from_ines(args.rom)
+    cart = Cart.from_file(args.rom)
 
     if args.print_cart_config:
         cart.print_config()
         exit(0)
 
-    # Currently overriding registers, time for nestest.nes!
-    nes = NES(cart, cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24), t=7, print_cpu_log=args.print_cpu_log, pal_filepath=args.pal)
+    # Currently overriding registers + time for nestest.nes -- not sure why it doesn't align with documented initial values?
+    nes = NES(
+        cart,
+        cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
+        t=7,
+        print_cpu_log=args.print_cpu_log,
+        pal_filepath=args.pal
+    )
     nes.play()
