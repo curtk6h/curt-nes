@@ -216,7 +216,7 @@ class VMStop(Exception):
 class Mapper(object):
     mapper_num = 0
 
-    def connect(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_read_reg, cpu_write_reg, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
+    def connect(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
         self.ram            = ram
         self.vram           = vram
         self.pals           = pals
@@ -227,8 +227,7 @@ class Mapper(object):
         self.chr_rom_banks  = chr_rom_banks
         self.chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
         self.chr_ram        = chr_ram
-        self.cpu_read_reg   = cpu_read_reg
-        self.cpu_write_reg  = cpu_write_reg
+        self.cpu_transfer_page_to_oam = cpu_transfer_page_to_oam
         self.ppu_read_reg   = ppu_read_reg
         self.ppu_write_reg  = ppu_write_reg
         self.apu_read_reg   = apu_read_reg
@@ -237,8 +236,7 @@ class Mapper(object):
         self._init_ppu_io(nt_mirroring)
 
         self._init_cpu_io(
-            cpu_read_reg,
-            cpu_write_reg,
+            cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
@@ -259,7 +257,7 @@ class Mapper(object):
     def set_nametable_mirroring(self, nt_mirroring):
         self._init_ppu_io(nt_mirroring)
 
-    def _init_cpu_io(self, cpu_read_reg, cpu_write_reg, ppu_read, ppu_write, apu_read, apu_write):
+    def _init_cpu_io(self, cpu_transfer_page_to_oam, ppu_read, ppu_write, apu_read, apu_write):
         # Address range	Size	Device
         # $0000–$07FF	$0800	2 KB internal RAM
         # $0800–$0FFF	$0800	Mirrors of $0000–$07FF
@@ -286,19 +284,7 @@ class Mapper(object):
         def write_prg_rom_bank_1(addr, value):
             pass # self.prg_rom_bank_1[addr-0xC000] = value
         def write_oamdma(_, from_page):
-            # TODO:
-            # 1. make cpu class and reconcile method names, etc
-            # 2. move this to cpu.cpu_transfer_page_to_oam, add cycles to CPU time totalling 513 or 514
-            # 3. finish connecting  
-            # 4. re-enable below
-            # (1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles.)
-            write_oam = None # TODO: set on cpu from ppu or mapper
-            from_addr = from_page << 8
-            read_cpu_page_byte = self.readers[from_addr]
-            i = 0
-            while i < 0x100:
-                write_oam(read_cpu_page_byte(from_addr+i))
-                i += 1
+            cpu_transfer_page_to_oam(from_page)
 
         ram = self.ram
         prg_ram = self.prg_ram
@@ -811,7 +797,7 @@ def create_ppu_funcs(
         )
     )
 
-def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
+def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=False):
     """
     The CPU is represented as a tuple of functions:
     (
@@ -819,6 +805,7 @@ def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
         trigger_nmi,
         trigger_reset,
         trigger_irq,
+        transfer_page_to_oam,
         inspect_regs
     )
     """
@@ -2204,11 +2191,23 @@ def create_cpu_funcs(fetch, store, regs=None, t=0, stop_on_brk=False):
             return pc  # interrupt disabled
         trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
 
+    # Registers
+
+    def transfer_page_to_oam(from_page):
+        nonlocal t
+        from_addr = from_page << 8
+        i = 0
+        while i < 0x100:
+            ppu_write_oam(fetch(from_addr+i))
+            i += 1
+        t = (t+514) & ~1 # 1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles
+
     return (
         tick,
         trigger_nmi,
         trigger_reset,
         trigger_irq,
+        transfer_page_to_oam,
         lambda: (pc, s, a, x, y, p)
     )
 
@@ -2332,7 +2331,7 @@ class Cart(object):
         print(f'Nametable mirroring: {nt_mirroring_descs[self.nt_mirroring]}')
         print(f'Console flavor: {console_flavors[self.console_flavor]}')
         
-    def connect(self, ram, vram, pals, cpu_read_reg, cpu_write_reg, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
+    def connect(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
         self.mapper.connect(
             ram,
             vram,
@@ -2341,8 +2340,7 @@ class Cart(object):
             self.prg_ram,
             self.chr_rom_banks,
             self.chr_ram,
-            cpu_read_reg,
-            cpu_write_reg,
+            cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
@@ -2358,16 +2356,6 @@ class NES(object):
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x1000 if cart.nt_mirroring == NT_MIRRORING_FOUR_SCREEN else 0x800)))
         self.print_cpu_log = print_cpu_log
-        self.cpu_tick,\
-        self.cpu_trigger_nmi,\
-        self.cpu_trigger_reset,\
-        self.cpu_trigger_irq,\
-        self.cpu_inspect_regs = create_cpu_funcs(
-            cart.mapper.cpu_read,
-            cart.mapper.cpu_write,
-            regs=cpu_regs,
-            t=t,
-            stop_on_brk=False)
         self.ppu_read_reg,\
         self.ppu_write_reg,\
         self.ppu_write_oam,\
@@ -2376,10 +2364,18 @@ class NES(object):
             cart.mapper.ppu_read,
             cart.mapper.ppu_write,
             pal_filepath=pal_filepath)
-        def cpu_read_reg(addr):
-            return 0
-        def cpu_write_reg(addr, value):
-            pass
+        self.cpu_tick,\
+        self.cpu_trigger_nmi,\
+        self.cpu_trigger_reset,\
+        self.cpu_trigger_irq,\
+        self.cpu_transfer_page_to_oam,\
+        self.cpu_inspect_regs = create_cpu_funcs(
+            cart.mapper.cpu_read,
+            cart.mapper.cpu_write,
+            self.ppu_write_oam,
+            regs=cpu_regs,
+            t=t,
+            stop_on_brk=False)
         def apu_read_reg(addr):
             return 0
         def apu_write_reg(addr, value):
@@ -2388,8 +2384,7 @@ class NES(object):
             self.ram,
             self.vram,
             self.ppu_pals(),
-            cpu_read_reg,
-            cpu_write_reg,
+            self.cpu_transfer_page_to_oam,
             self.ppu_read_reg,
             self.ppu_write_reg,
             apu_read_reg,

@@ -1,7 +1,7 @@
 import unittest
 import array
 
-from curt_nes import play, Mapper, create_cpu_funcs, create_ppu_funcs, VMStop
+from curt_nes import Mapper, create_cpu_funcs, create_ppu_funcs, VMStop
 
 class TestMapper(unittest.TestCase):
     sample_ram  = array.array('B', (0x00|(i&0xF) for i in range(0x800)))
@@ -16,22 +16,18 @@ class TestMapper(unittest.TestCase):
     sample_pals = array.array('B', (i&0xF for i in range(0x20)))
 
     def setUp(self):
-        self.cpu_reads  = cpu_reads  = []
-        self.cpu_writes = cpu_writes = []
+        self.cpu_transfer_page_to_oam_calls = cpu_transfer_page_to_oam_calls = []
         self.ppu_reads  = ppu_reads  = []
         self.ppu_writes = ppu_writes = []
         self.apu_reads  = apu_reads  = []
         self.apu_writes = apu_writes = []
-        def cpu_read_reg(addr):
-            cpu_reads.append(addr)
-            return 0x66
-        def cpu_write_reg(addr, value):
-            cpu_writes.append((addr, value))
         def ppu_read_reg(addr):
             ppu_reads.append(addr)
             return 0x55
         def ppu_write_reg(addr, value):
             ppu_writes.append((addr, value))
+        def cpu_transfer_page_to_oam(page_num):
+            cpu_transfer_page_to_oam_calls.append(page_num)
         def apu_read_reg(addr):
             apu_reads.append(addr)
             return 0x77
@@ -46,8 +42,7 @@ class TestMapper(unittest.TestCase):
             self.sample_prg_ram,
             self.sample_chr_rom,
             None, # self.sample_chr_ram
-            cpu_read_reg,
-            cpu_write_reg,
+            cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
@@ -115,6 +110,7 @@ class TestCPU(unittest.TestCase):
     def _build_mapper_and_cpu(self, prg_rom, regs, chr_rom=None, mapper_cls=Mapper):
         self.ppu_reads  = []
         self.ppu_writes = []
+        self.ppu_oam_writes = []
         self.apu_reads  = []
         self.apu_writes = []
         ram  = array.array('B', (0 for _ in range(0x800)))
@@ -134,19 +130,17 @@ class TestCPU(unittest.TestCase):
             return 0x55
         def ppu_write_reg(addr, value):
             self.ppu_writes.append((addr, value))
+        def ppu_write_oam(value):
+            self.ppu_oam_writes.append(value)
         def apu_read_reg(addr):
             self.apu_reads.append(addr)
             return 0x77
         def apu_write_reg(addr, value):
             self.apu_writes.append((addr, value))
-            
+
         mapper = Mapper()
-        cpu_funcs = create_cpu_funcs(mapper.cpu_read, mapper.cpu_write, regs=regs, stop_on_brk=True)
-        tick, trigger_nmi, trigger_reset, trigger_irq, inspect_regs = cpu_funcs
-        def cpu_read_reg(addr):
-            pass
-        def cpu_write_reg(addr, value):
-            pass
+        cpu_funcs = create_cpu_funcs(mapper.cpu_read, mapper.cpu_write, ppu_write_oam, regs=regs, stop_on_brk=True)
+        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_inspect_regs = cpu_funcs
         mapper.connect(
             ram,
             vram,
@@ -155,8 +149,7 @@ class TestCPU(unittest.TestCase):
             prg_ram,
             chr_rom_banks,
             chr_ram,
-            cpu_read_reg,
-            cpu_write_reg,
+            cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
@@ -166,12 +159,12 @@ class TestCPU(unittest.TestCase):
 
     def _test_play(self, prg_rom, expected_regs, expected_t, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, ram_patches=[], expected_ram_patches=[], prg_rom_patches=[], expected_prg_rom_patches=[], expected_ppu_reads=[], expected_ppu_writes=[]):
         mapper, cpu_funcs = self._build_mapper_and_cpu(prg_rom, (pc, s, a, x, y, p))
-        tick, trigger_nmi, trigger_reset, trigger_irq, insepect_regs = cpu_funcs
+        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_insepect_regs = cpu_funcs
 
-        def tick_forever():
+        def cpu_tick_forever():
             try:
                 while True:
-                    t = tick()
+                    t = cpu_tick()
             except VMStop:
                 return t
 
@@ -189,8 +182,8 @@ class TestCPU(unittest.TestCase):
         expected_prg_rom = bytearray(b''.join(mapper.prg_rom_banks))
 
         # Run program!
-        t = tick_forever()
-        regs = insepect_regs()
+        t = cpu_tick_forever()
+        regs = cpu_insepect_regs()
 
         self.assertTupleEqual(regs, expected_regs)
 
@@ -654,8 +647,7 @@ class TestCPU(unittest.TestCase):
 class TestPPU(unittest.TestCase):
     # TODO: clean this up and share between tests; it's a copy and paste job!
     def _build_ppu_funcs(self, prg_rom, chr_rom=b'', **ppu_regs):
-        self.cpu_reads  = []
-        self.cpu_writes = []
+        self.cpu_transfer_page_to_oam_calls = []
         self.ppu_reads  = []
         self.ppu_writes = []
         self.apu_reads  = []
@@ -672,11 +664,8 @@ class TestPPU(unittest.TestCase):
         pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
             prg_rom_banks[0][i] = value
-        def cpu_read_reg(addr):
-            self.cpu_reads.append(addr)
-            return 0x66
-        def cpu_write_reg(addr, value):
-            self.cpu_writes.append((addr, value))
+        def cpu_transfer_page_to_oam(page_num):
+            self.cpu_transfer_page_to_oam_calls.append(page_num)
         def ppu_read_reg(addr):
             self.ppu_reads.append(addr)
             return 0x55
@@ -699,8 +688,7 @@ class TestPPU(unittest.TestCase):
             prg_ram,
             chr_rom_banks,
             chr_ram,
-            cpu_read_reg,
-            cpu_write_reg,
+            cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
