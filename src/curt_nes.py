@@ -283,8 +283,8 @@ class Mapper(object):
             pass # self.prg_rom_bank_0[addr-0x8000] = value
         def write_prg_rom_bank_1(addr, value):
             pass # self.prg_rom_bank_1[addr-0xC000] = value
-        def write_oamdma(_, from_page):
-            cpu_transfer_page_to_oam(from_page)
+        def write_oamdma(_, page_num):
+            cpu_transfer_page_to_oam(page_num)
 
         ram = self.ram
         prg_ram = self.prg_ram
@@ -323,7 +323,7 @@ class Mapper(object):
             [write_prg_rom_bank_1] * 0x4000   # prg rom bank 1
         )
         
-        self.cpu_writers[0x4014] = lambda addr, value: None # write_oamdma # TODO: re-enable this
+        self.cpu_writers[0x4014] = write_oamdma
 
         assert len(self.cpu_readers) == 0x10000
         assert len(self.cpu_writers) == 0x10000
@@ -2193,12 +2193,12 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
 
     # Registers
 
-    def transfer_page_to_oam(from_page):
+    def transfer_page_to_oam(page_num):
         nonlocal t
-        from_addr = from_page << 8
+        addr = page_num << 8
         i = 0
         while i < 0x100:
-            ppu_write_oam(fetch(from_addr+i))
+            ppu_write_oam(fetch(addr+i))
             i += 1
         t = (t+514) & ~1 # 1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles
 

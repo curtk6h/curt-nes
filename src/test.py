@@ -82,6 +82,10 @@ class TestMapper(unittest.TestCase):
             [(i%8, 0xB0|(i&0xF)) for i in range(0x2008, 0x4000)]
         )
 
+    def test_cpu_oamdma(self):
+        self.mapper.cpu_write(0x4014, 0x0200)
+        self.assertEqual(self.cpu_transfer_page_to_oam_calls, [0x0200])
+
     def test_cpu_io_apu_mappings(self):
         # $4000-$4017	$0018	NES APU and I/O registers
         for i in range(0x4000, 0x4018):
