@@ -774,8 +774,8 @@ def create_ppu_funcs(
 
     def write_oam(value):
         nonlocal oam_addr
-        oam[oam_addr&0xFF] = value
-        oam_addr += 1
+        oam[oam_addr] = value
+        oam_addr = (oam_addr+1) & 0xFF
 
     return (
         read_reg,
