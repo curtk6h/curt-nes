@@ -13,7 +13,6 @@
 # * default status to unused = 1 and removed redundant sets
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
-#   * consider exposing registers to inspection (ie. use vector instead of individual vars)
 # * test interrupts
 # * build tiny sample rom that runs in working emulator
 #   * (1) create .cfg file (2) compile do nothing program (3) compile program that loops 
@@ -579,38 +578,8 @@ class PPU(object):
 
         self.frame_num += 1
 
-    def build_scanline_funcs(self):
-        def idle():
-            pass
-        def fetch_bg_0_addr_only():
-            pass
-        def fetch_nt():
-            pass
-        def fetch_at():
-            pass
-        def fetch_bg_0():
-            pass
-        def fetch_bg_1():
-            pass
-        def inc_x():
-            pass
-        def inc_xy():
-            pass
-        def reset_x():
-            pass
-        # TODO: this lookup can be easily flattened
-        visible_scanline_funcs = [None] * 340
-        idle_scanline_funcs = [None] * 340
-        vblank_scanline_funcs = [None] * 340
-        pre_render_scanline_funcs = [None] * 340
-        self.scanline_funcs = [visible_scanline_funcs] * 240 + [idle_scanline_funcs] * (262-240)
-        self.scanline_funcs[241] = vblank_scanline_funcs
-        self.scanline_funcs[261] = pre_render_scanline_funcs
-
-    def tick(self):
-        self.scanline_funcs[self.scanline_idx][self.t]()
-
 def create_ppu_funcs(
+    screen,
     reg_io_value=0x00,
     reg_io_write_state=0,
     ppu_status=0x00,
@@ -641,6 +610,35 @@ def create_ppu_funcs(
     scanline_idx = 0
     pals = array.array('B', (0 for _ in range(0x20)))
     rgbs = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
+    scanline_num = 0
+
+    def idle():
+        nonlocal t
+        t += 1
+    def fetch_bg_0_addr_only():
+        pass
+    def fetch_nt():
+        pass
+    def fetch_at():
+        pass
+    def fetch_bg_0():
+        pass
+    def fetch_bg_1():
+        pass
+    def inc_x():
+        pass
+    def inc_xy():
+        pass
+    def reset_x():
+        pass
+    visible_scanline_funcs = [idle()] * 340
+    idle_scanline_funcs = [idle()] * 340
+    vblank_scanline_funcs = [idle()] * 340
+    pre_render_scanline_funcs = [idle()] * 340
+    
+    tick_funcs = [visible_scanline_funcs] * 240 + [idle_scanline_funcs] * (262-240)
+    tick_funcs[241] = vblank_scanline_funcs
+    tick_funcs[261] = pre_render_scanline_funcs
 
     def read_nothing():
         pass
@@ -765,6 +763,7 @@ def create_ppu_funcs(
         store = ppu_write
 
     return (
+        lambda: tick_funcs[scanline_num][t](),
         read_reg,
         write_reg,
         write_oam,
@@ -781,7 +780,8 @@ def create_ppu_funcs(
             tmp_addr=tmp_addr,
             oam_addr=oam_addr,
             ppu_data=ppu_data,
-            fine_x_scroll=fine_x_scroll
+            fine_x_scroll=fine_x_scroll,
+            t=t
         )
     )
 
@@ -2338,19 +2338,20 @@ class Cart(object):
         )
 
 class NES(object):
-    def __init__(self, cart, cpu_regs=None, t=0, print_cpu_log=False, pal_filepath=None):
+    def __init__(self, screen, cart, cpu_regs=None, t=0, print_cpu_log=False, pal_filepath=None):
         self.cart = cart
         self.cpu_regs = cpu_regs
         self.initial_t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x1000 if cart.nt_mirroring == NT_MIRRORING_FOUR_SCREEN else 0x800)))
         self.print_cpu_log = print_cpu_log
+        self.ppu_tick,\
         self.ppu_read_reg,\
         self.ppu_write_reg,\
         self.ppu_write_oam,\
         self.ppu_pals,\
         self.ppu_set_mapper_funcs,\
-        self.ppu_inspect_regs = create_ppu_funcs(pal_filepath=pal_filepath)
+        self.ppu_inspect_regs = create_ppu_funcs(screen, pal_filepath=pal_filepath)
         self.cpu_tick,\
         self.cpu_trigger_nmi,\
         self.cpu_trigger_reset,\
@@ -2421,7 +2422,9 @@ if __name__ == "__main__":
         exit(0)
 
     # Currently overriding registers + time for nestest.nes -- not sure why it doesn't align with documented initial values?
+    screen = array.array('B', (0 for _ in range(256*240)))
     nes = NES(
+        screen,
         cart,
         cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
         t=7,
