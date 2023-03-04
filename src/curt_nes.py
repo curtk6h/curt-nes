@@ -148,19 +148,19 @@ INSTRUCTION_ADDR_MODES = [
 ]
 
 ADDR_MODE_FORMATS = [
-    lambda mapper, pc, operands: '',
-    lambda mapper, pc, operands: ' #${:02X}'   .format(operands[1]),
-    lambda mapper, pc, operands: ' A',
-    lambda mapper, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], mapper.cpu_read(operands[1])),
-    lambda mapper, pc, operands: ' ${:02X},X'  .format(operands[1]),
-    lambda mapper, pc, operands: ' ${:02X},Y'  .format(operands[1]),
-    lambda mapper, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
-    lambda mapper, pc, operands: ' ${:04X},X'  .format(operands[1]|(operands[2]<<8)),
-    lambda mapper, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
-    lambda mapper, pc, operands: ' (${:02X},X)'.format(operands[1]),
-    lambda mapper, pc, operands: ' (${:02X}),Y'.format(operands[1]),
-    lambda mapper, pc, operands: ' (${:04X})'  .format(operands[1]|(operands[2]<<8)),
-    lambda mapper, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
+    lambda cpu_read, pc, operands: '',
+    lambda cpu_read, pc, operands: ' #${:02X}'   .format(operands[1]),
+    lambda cpu_read, pc, operands: ' A',
+    lambda cpu_read, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], cpu_read(operands[1])),
+    lambda cpu_read, pc, operands: ' ${:02X},X'  .format(operands[1]),
+    lambda cpu_read, pc, operands: ' ${:02X},Y'  .format(operands[1]),
+    lambda cpu_read, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
+    lambda cpu_read, pc, operands: ' ${:04X},X'  .format(operands[1]|(operands[2]<<8)),
+    lambda cpu_read, pc, operands: ' ${:04X},Y'  .format(operands[1]|(operands[2]<<8)),
+    lambda cpu_read, pc, operands: ' (${:02X},X)'.format(operands[1]),
+    lambda cpu_read, pc, operands: ' (${:02X}),Y'.format(operands[1]),
+    lambda cpu_read, pc, operands: ' (${:04X})'  .format(operands[1]|(operands[2]<<8)),
+    lambda cpu_read, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
 ]
 
 # PPU memory constants
@@ -2257,6 +2257,9 @@ class Cart(object):
         is_nes2_format              = header[0x7] & 0x0C == 0x08
         console_flavor              = header[0x7] & 0x03
 
+        if mapper_num >= len(mappers):
+            raise ValueError('Mapper {} not supported'.format(mapper_num))
+
         if use_four_screen_mirroring:
             nt_mirroring = NT_MIRRORING_FOUR_SCREEN
         elif use_vertical_mirroring:
@@ -2268,7 +2271,8 @@ class Cart(object):
             cart_options,
             nt_mirroring=nt_mirroring,
             has_non_volatile_memory=has_non_volatile_memory,
-            console_flavor=console_flavor
+            console_flavor=console_flavor,
+            mapper_num=mapper_num
         )
 
         if is_nes2_format:
@@ -2284,7 +2288,6 @@ class Cart(object):
     @staticmethod
     def from_ines_file(ines_file, header, num_prg_rom_banks, num_chr_rom_banks, has_trainer, mapper_num, cart_options):
         # See: https://www.nesdev.org/wiki/INES
-
         # Extract trainer
         trainer = ines_file.read(0x200) if has_trainer else None
 
@@ -2294,19 +2297,12 @@ class Cart(object):
         # Extract  8 KB CHR-ROM banks
         chr_rom_banks = [ines_file.read(0x2000) for _ in range(num_chr_rom_banks)]
 
-        # Instantiate mapper
-        try:
-            mapper = mappers[mapper_num]()
-        except IndexError:
-            raise ValueError('Memory mapper {} not supported'.format(mapper_num))
-
         return Cart(
             prg_rom_banks,
             chr_rom_banks,
             0x2000,
             0 if chr_rom_banks else 0x2000,
             trainer,
-            mapper=mapper,
             **cart_options
         )
 
@@ -2391,13 +2387,13 @@ class NES(object):
             if self.print_cpu_log:
                 while True:
                     pc, s, a, x, y, p = self.cpu_inspect_regs()
-                    op = self.cart.mapper.cpu_read(pc)
+                    op = self.cpu_read(pc)
                     num_operands = INSTRUCTION_BYTES[op]
-                    operands = [(self.cart.mapper.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                    operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
                     operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
                     addr_mode = INSTRUCTION_ADDR_MODES[op]
                     addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cart.mapper, pc, operands)}'
+                    log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
                     log_line += ' ' * (48-len(log_line))
                     log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                     print(log_line)
