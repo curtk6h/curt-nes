@@ -213,51 +213,21 @@ CONSOLE_FLAVOR_OTHER = 3
 class VMStop(Exception):
     pass
 
-class Mapper(object):
-    mapper_num = 0
+def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
+    """
+    The mapper is represented as a tuple of functions:
+    (
+        cpu_read,
+        cpu_write,
+        ppu_read,
+        ppu_write
+    )
+    """
+    prg_rom_bank_0 = prg_rom_banks[0]
+    prg_rom_bank_1 = prg_rom_banks[1%len(prg_rom_banks)]
+    chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
 
-    def connect(self, ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
-        self.ram            = ram
-        self.vram           = vram
-        self.pals           = pals
-        self.prg_rom_banks  = prg_rom_banks
-        self.prg_rom_bank_0 = prg_rom_banks[0]
-        self.prg_rom_bank_1 = prg_rom_banks[1] if len(prg_rom_banks) > 1 else prg_rom_banks[0]
-        self.prg_ram        = prg_ram
-        self.chr_rom_banks  = chr_rom_banks
-        self.chr_rom_bank   = chr_rom_banks and chr_rom_banks[0]
-        self.chr_ram        = chr_ram
-        self.cpu_transfer_page_to_oam = cpu_transfer_page_to_oam
-        self.ppu_read_reg   = ppu_read_reg
-        self.ppu_write_reg  = ppu_write_reg
-        self.apu_read_reg   = apu_read_reg
-        self.apu_write_reg  = apu_write_reg
-
-        self._init_ppu_io(nt_mirroring)
-
-        self._init_cpu_io(
-            cpu_transfer_page_to_oam,
-            ppu_read_reg,
-            ppu_write_reg,
-            apu_read_reg,
-            apu_write_reg)
-
-    def cpu_read(self, addr):
-        return self.cpu_readers[addr](addr)
-
-    def cpu_write(self, addr, value):
-        self.cpu_writers[addr](addr, value)
-
-    def ppu_read(self, addr):
-        return self.ppu_readers[addr](addr)
-
-    def ppu_write(self, addr, value):
-        self.ppu_writers[addr](addr, value)
-    
-    def set_nametable_mirroring(self, nt_mirroring):
-        self._init_ppu_io(nt_mirroring)
-
-    def _init_cpu_io(self, cpu_transfer_page_to_oam, ppu_read, ppu_write, apu_read, apu_write):
+    def create_cpu_accessors():
         # Address range	Size	Device
         # $0000–$07FF	$0800	2 KB internal RAM
         # $0800–$0FFF	$0800	Mirrors of $0000–$07FF
@@ -280,55 +250,55 @@ class Mapper(object):
         def write_prg_ram(addr, value):
             prg_ram[addr-0x6000] = value
         def write_prg_rom_bank_0(addr, value):
-            pass # self.prg_rom_bank_0[addr-0x8000] = value
+            pass # prg_rom_bank_0[addr-0x8000] = value
         def write_prg_rom_bank_1(addr, value):
-            pass # self.prg_rom_bank_1[addr-0xC000] = value
+            pass # prg_rom_bank_1[addr-0xC000] = value
         def write_oamdma(_, page_num):
             cpu_transfer_page_to_oam(page_num)
 
-        ram = self.ram
-        prg_ram = self.prg_ram
-        self.cpu_readers = (
-            # ram
-            [lambda addr: ram[addr]] * 0x0800 +
-            [lambda addr: ram[addr-0x0800]] * 0x0800 + # mirror
-            [lambda addr: ram[addr-0x1000]] * 0x0800 + # mirror
-            [lambda addr: ram[addr-0x1800]] * 0x0800 + # mirror
-            # ppu
-            [lambda addr: ppu_read((addr-0x2000))] * 8 +
-            [lambda addr: ppu_read((addr-0x2000)&7)] * (0x2000-8) + # mirrors
-            # apu
-            [lambda addr: apu_read((addr-0x4000))] * 0x0020 +
-            # cart
-            [lambda addr: 0] * 0x1FE0 + # expansion rom?
-            [lambda addr: prg_ram[addr-0x6000]] * 0x2000 + # prg ram
-            [lambda addr: self.prg_rom_bank_0[addr-0x8000]] * 0x4000 + # prg rom bank 0
-            [lambda addr: self.prg_rom_bank_1[addr-0xC000]] * 0x4000   # prg rom bank 1
+        return (
+            # cpu_readers
+            (
+                # ram
+                [lambda addr: ram[addr]] * 0x0800 +
+                [lambda addr: ram[addr-0x0800]] * 0x0800 + # mirror
+                [lambda addr: ram[addr-0x1000]] * 0x0800 + # mirror
+                [lambda addr: ram[addr-0x1800]] * 0x0800 + # mirror
+                # ppu
+                [lambda addr: ppu_read_reg((addr-0x2000))] * 8 +
+                [lambda addr: ppu_read_reg((addr-0x2000)&7)] * (0x2000-8) + # mirrors
+                # apu
+                [lambda addr: apu_read_reg((addr-0x4000))] * 0x0020 +
+                # cart
+                [lambda addr: 0] * 0x1FE0 + # expansion rom?
+                [lambda addr: prg_ram[addr-0x6000]] * 0x2000 + # prg ram
+                [lambda addr: prg_rom_bank_0[addr-0x8000]] * 0x4000 + # prg rom bank 0
+                [lambda addr: prg_rom_bank_1[addr-0xC000]] * 0x4000   # prg rom bank 1
+            ),
+            # cpu_writers
+            (
+                # ram
+                [write_ram_0] * 0x0800 +
+                [write_ram_1] * 0x0800 +
+                [write_ram_2] * 0x0800 +
+                [write_ram_3] * 0x0800 +
+                # ppu / 0x2000
+                [lambda addr, value: ppu_write_reg((addr-0x2000)&7, value)] * 0x2000 +
+                # apu / 0x4000
+                [lambda addr, value: apu_write_reg((addr-0x4000), value)] * 0x0014 +
+                # dma / 0x4014
+                [write_oamdma] +
+                # apu / 0x4015
+                [lambda addr, value: apu_write_reg((addr-0x4000), value)] * 0x000B +
+                # cart
+                [lambda addr, value: None] * 0x1FE0 + # expansion rom?
+                [write_prg_ram] * 0x2000 + # prg ram
+                [write_prg_rom_bank_0] * 0x4000 + # prg rom bank 0
+                [write_prg_rom_bank_1] * 0x4000   # prg rom bank 1
+            )
         )
 
-        self.cpu_writers = (
-            # ram
-            [write_ram_0] * 0x0800 +
-            [write_ram_1] * 0x0800 +
-            [write_ram_2] * 0x0800 +
-            [write_ram_3] * 0x0800 +
-            # ppu
-            [lambda addr, value: ppu_write((addr-0x2000)&7, value)] * 0x2000 +
-            # apu
-            [lambda addr, value: apu_write((addr-0x4000), value)] * 0x0020 +
-            # cart
-            [lambda addr, value: None] * 0x1FE0 + # expansion rom?
-            [write_prg_ram] * 0x2000 + # prg ram
-            [write_prg_rom_bank_0] * 0x4000 + # prg rom bank 0
-            [write_prg_rom_bank_1] * 0x4000   # prg rom bank 1
-        )
-        
-        self.cpu_writers[0x4014] = write_oamdma
-
-        assert len(self.cpu_readers) == 0x10000
-        assert len(self.cpu_writers) == 0x10000
-
-    def _init_ppu_io(self, nt_mirroring):
+    def create_ppu_accessors():
         # Address range	Size	Description
         # $0000-$0FFF	$1000	Pattern table 0
         # $1000-$1FFF	$1000	Pattern table 1
@@ -341,82 +311,82 @@ class Mapper(object):
         # $3F20-$3FFF	$00E0	Mirrors of $3F00-$3F1F
 
         def r_pattern_tables_from_chr_rom(addr):
-            return self.chr_rom_bank[addr]
+            return chr_rom_bank[addr]
         def r_pattern_tables_from_chr_ram(addr):
-            return self.chr_ram[addr]
+            return chr_ram[addr]
         def r_palette_ram_indexes(addr):
-            return self.pals[(addr-(0x3F00))&0x1F]
+            return pals[(addr-(0x3F00))&0x1F]
         def r_nametable_0_0(addr):
-            return self.vram[(addr-(0x2000-0x0000))&0x0FFF]
+            return vram[(addr-(0x2000-0x0000))&0x0FFF]
         def r_nametable_0_1(addr):
-            return self.vram[(addr-(0x2000-0x0400))&0x0FFF]
+            return vram[(addr-(0x2000-0x0400))&0x0FFF]
         def r_nametable_0_2(addr):
-            return self.vram[(addr-(0x2000-0x0800))&0x0FFF]
+            return vram[(addr-(0x2000-0x0800))&0x0FFF]
         def r_nametable_0_3(addr):
-            return self.vram[(addr-(0x2000-0x0C00))&0x0FFF]
+            return vram[(addr-(0x2000-0x0C00))&0x0FFF]
         def r_nametable_1_0(addr):
-            return self.vram[(addr-(0x2400-0x0000))&0x0FFF]
+            return vram[(addr-(0x2400-0x0000))&0x0FFF]
         def r_nametable_1_1(addr):
-            return self.vram[(addr-(0x2400-0x0400))&0x0FFF]
+            return vram[(addr-(0x2400-0x0400))&0x0FFF]
         def r_nametable_1_2(addr):
-            return self.vram[(addr-(0x2400-0x0800))&0x0FFF]
+            return vram[(addr-(0x2400-0x0800))&0x0FFF]
         def r_nametable_1_3(addr):
-            return self.vram[(addr-(0x2400-0x0C00))&0x0FFF]
+            return vram[(addr-(0x2400-0x0C00))&0x0FFF]
         def r_nametable_2_0(addr):
-            return self.vram[(addr-(0x2800-0x0000))&0x0FFF]
+            return vram[(addr-(0x2800-0x0000))&0x0FFF]
         def r_nametable_2_1(addr):
-            return self.vram[(addr-(0x2800-0x0400))&0x0FFF]
+            return vram[(addr-(0x2800-0x0400))&0x0FFF]
         def r_nametable_2_2(addr):
-            return self.vram[(addr-(0x2800-0x0800))&0x0FFF]
+            return vram[(addr-(0x2800-0x0800))&0x0FFF]
         def r_nametable_2_3(addr):
-            return self.vram[(addr-(0x2800-0x0C00))&0x0FFF]
+            return vram[(addr-(0x2800-0x0C00))&0x0FFF]
         def r_nametable_3_0(addr):
-            return self.vram[(addr-(0x2C00-0x0000))&0x0FFF]
+            return vram[(addr-(0x2C00-0x0000))&0x0FFF]
         def r_nametable_3_1(addr):
-            return self.vram[(addr-(0x2C00-0x0400))&0x0FFF]
+            return vram[(addr-(0x2C00-0x0400))&0x0FFF]
         def r_nametable_3_2(addr):
-            return self.vram[(addr-(0x2C00-0x0800))&0x0FFF]
+            return vram[(addr-(0x2C00-0x0800))&0x0FFF]
         def r_nametable_3_3(addr):
-            return self.vram[(addr-(0x2C00-0x0C00))&0x0FFF]
+            return vram[(addr-(0x2C00-0x0C00))&0x0FFF]
             
         def w_pattern_tables_from_chr_rom(addr, value):
-            self.chr_rom_bank[addr] = value
+            chr_rom_bank[addr] = value
         def w_pattern_tables_from_chr_ram(addr, value):
-            self.chr_ram[addr] = value
+            chr_ram[addr] = value
         def w_palette_ram_indexes(addr, value):
-            self.pals[(addr-(0x3F00))&0x1F] = value
+            pals[(addr-(0x3F00))&0x1F] = value
         def w_nametable_0_0(addr, value):
-            self.vram[(addr-(0x2000-0x0000))&0x0FFF] = value
+            vram[(addr-(0x2000-0x0000))&0x0FFF] = value
         def w_nametable_0_1(addr, value):
-            self.vram[(addr-(0x2000-0x0400))&0x0FFF] = value
+            vram[(addr-(0x2000-0x0400))&0x0FFF] = value
         def w_nametable_0_2(addr, value):
-            self.vram[(addr-(0x2000-0x0800))&0x0FFF] = value
+            vram[(addr-(0x2000-0x0800))&0x0FFF] = value
         def w_nametable_0_3(addr, value):
-            self.vram[(addr-(0x2000-0x0C00))&0x0FFF] = value
+            vram[(addr-(0x2000-0x0C00))&0x0FFF] = value
         def w_nametable_1_0(addr, value):
-            self.vram[(addr-(0x2400-0x0000))&0x0FFF] = value
+            vram[(addr-(0x2400-0x0000))&0x0FFF] = value
         def w_nametable_1_1(addr, value):
-            self.vram[(addr-(0x2400-0x0400))&0x0FFF] = value
+            vram[(addr-(0x2400-0x0400))&0x0FFF] = value
         def w_nametable_1_2(addr, value):
-            self.vram[(addr-(0x2400-0x0800))&0x0FFF] = value
+            vram[(addr-(0x2400-0x0800))&0x0FFF] = value
         def w_nametable_1_3(addr, value):
-            self.vram[(addr-(0x2400-0x0C00))&0x0FFF] = value
+            vram[(addr-(0x2400-0x0C00))&0x0FFF] = value
         def w_nametable_2_0(addr, value):
-            self.vram[(addr-(0x2800-0x0000))&0x0FFF] = value
+            vram[(addr-(0x2800-0x0000))&0x0FFF] = value
         def w_nametable_2_1(addr, value):
-            self.vram[(addr-(0x2800-0x0400))&0x0FFF] = value
+            vram[(addr-(0x2800-0x0400))&0x0FFF] = value
         def w_nametable_2_2(addr, value):
-            self.vram[(addr-(0x2800-0x0800))&0x0FFF] = value
+            vram[(addr-(0x2800-0x0800))&0x0FFF] = value
         def w_nametable_2_3(addr, value):
-            self.vram[(addr-(0x2800-0x0C00))&0x0FFF] = value
+            vram[(addr-(0x2800-0x0C00))&0x0FFF] = value
         def w_nametable_3_0(addr, value):
-            self.vram[(addr-(0x2C00-0x0000))&0x0FFF] = value
+            vram[(addr-(0x2C00-0x0000))&0x0FFF] = value
         def w_nametable_3_1(addr, value):
-            self.vram[(addr-(0x2C00-0x0400))&0x0FFF] = value
+            vram[(addr-(0x2C00-0x0400))&0x0FFF] = value
         def w_nametable_3_2(addr, value):
-            self.vram[(addr-(0x2C00-0x0800))&0x0FFF] = value
+            vram[(addr-(0x2C00-0x0800))&0x0FFF] = value
         def w_nametable_3_3(addr, value):
-            self.vram[(addr-(0x2C00-0x0C00))&0x0FFF] = value
+            vram[(addr-(0x2C00-0x0C00))&0x0FFF] = value
 
         if nt_mirroring == NT_MIRRORING_VERTICAL:
             r_nametable_0 = r_nametable_0_0
@@ -457,10 +427,10 @@ class Mapper(object):
         else:
             raise ValueError(f'Nametable mirroring {nt_mirroring} not supported')
 
-        if self.chr_ram and self.chr_rom_bank:
+        if chr_ram and chr_rom_bank:
             raise ValueError('CHR-ROM/RAM configuration not supported by default mapper (both are present)')
 
-        if self.chr_ram:
+        if chr_ram:
             r_pattern_table_0 = r_pattern_tables_from_chr_ram
             r_pattern_table_1 = r_pattern_tables_from_chr_ram
             w_pattern_table_0 = w_pattern_tables_from_chr_ram
@@ -471,41 +441,53 @@ class Mapper(object):
             w_pattern_table_0 = w_pattern_tables_from_chr_rom
             w_pattern_table_1 = w_pattern_tables_from_chr_rom
 
-        self.ppu_readers = (
-            [r_pattern_table_0]      * 0x1000 +
-            [r_pattern_table_1]      * 0x1000 +
-            [r_nametable_0]          * 0x0400 +
-            [r_nametable_1]          * 0x0400 +
-            [r_nametable_2]          * 0x0400 +
-            [r_nametable_3]          * 0x0400 +
-            [r_nametable_0]          * 0x0400 +
-            [r_nametable_1]          * 0x0400 +
-            [r_nametable_2]          * 0x0400 +
-            [r_nametable_3]          * 0x0300 +
-            [r_palette_ram_indexes]  * 0x100
+        return (
+            (
+                [r_pattern_table_0]      * 0x1000 +
+                [r_pattern_table_1]      * 0x1000 +
+                [r_nametable_0]          * 0x0400 +
+                [r_nametable_1]          * 0x0400 +
+                [r_nametable_2]          * 0x0400 +
+                [r_nametable_3]          * 0x0400 +
+                [r_nametable_0]          * 0x0400 +
+                [r_nametable_1]          * 0x0400 +
+                [r_nametable_2]          * 0x0400 +
+                [r_nametable_3]          * 0x0300 +
+                [r_palette_ram_indexes]  * 0x100
+            ),
+            (
+                [w_pattern_table_0]      * 0x1000 +
+                [w_pattern_table_1]      * 0x1000 +
+                [w_nametable_0]          * 0x0400 +
+                [w_nametable_1]          * 0x0400 +
+                [w_nametable_2]          * 0x0400 +
+                [w_nametable_3]          * 0x0400 +
+                [w_nametable_0]          * 0x0400 +
+                [w_nametable_1]          * 0x0400 +
+                [w_nametable_2]          * 0x0400 +
+                [w_nametable_3]          * 0x0300 +
+                [w_palette_ram_indexes]  * 0x100
+            )
         )
 
-        self.ppu_writers = (
-            [w_pattern_table_0]      * 0x1000 +
-            [w_pattern_table_1]      * 0x1000 +
-            [w_nametable_0]          * 0x0400 +
-            [w_nametable_1]          * 0x0400 +
-            [w_nametable_2]          * 0x0400 +
-            [w_nametable_3]          * 0x0400 +
-            [w_nametable_0]          * 0x0400 +
-            [w_nametable_1]          * 0x0400 +
-            [w_nametable_2]          * 0x0400 +
-            [w_nametable_3]          * 0x0300 +
-            [w_palette_ram_indexes]  * 0x100
-        )
+    cpu_readers, cpu_writers = create_cpu_accessors()
+    cpu_read = lambda addr: cpu_readers[addr](addr)
+    def cpu_write(addr, value):
+        cpu_writers[addr](addr, value)
 
-        assert(len(self.ppu_readers)==0x4000)
-        assert(len(self.ppu_writers)==0x4000)
+    ppu_readers, ppu_writers = create_ppu_accessors()
+    ppu_read = lambda addr: ppu_readers[addr](addr)
+    def ppu_write(addr, value):
+        ppu_writers[addr](addr, value)
 
-mappers = {
-    mapper.mapper_num: mapper
-    for mapper in (Mapper,)
-}
+    return (
+        cpu_read,
+        cpu_write,
+        ppu_read,
+        ppu_write
+    )
+
+mappers = [create_default_mapper_funcs]
 
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
@@ -629,8 +611,6 @@ class PPU(object):
         self.scanline_funcs[self.scanline_idx][self.t]()
 
 def create_ppu_funcs(
-    fetch,
-    store,
     reg_io_value=0x00,
     reg_io_write_state=0,
     ppu_status=0x00,
@@ -651,9 +631,11 @@ def create_ppu_funcs(
         write_reg,
         write_oam,
         pals,
+        set_mapper_funcs,
         inspect_regs
     )
     """
+    fetch = store = None
     oam = array.array('B', (0 for _ in range(0x100)))
     frame_num = 0
     scanline_idx = 0
@@ -777,11 +759,17 @@ def create_ppu_funcs(
         oam[oam_addr] = value
         oam_addr = (oam_addr+1) & 0xFF
 
+    def set_mapper_funcs(ppu_read, ppu_write):
+        nonlocal fetch, store
+        fetch = ppu_read
+        store = ppu_write
+
     return (
         read_reg,
         write_reg,
         write_oam,
         lambda: pals,  # return internal pals storage,
+        set_mapper_funcs,
         lambda: dict(  # return internal regs / mem for testing purposes
             oam=oam,
             reg_io_value=reg_io_value,
@@ -797,7 +785,7 @@ def create_ppu_funcs(
         )
     )
 
-def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=False):
+def create_cpu_funcs(ppu_write_oam, regs=None, t=0, stop_on_brk=False):
     """
     The CPU is represented as a tuple of functions:
     (
@@ -806,9 +794,12 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
         trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
+        set_mapper_funcs,
         inspect_regs
     )
     """
+
+    fetch = store = None
 
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
     
@@ -2164,8 +2155,6 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
         pc = ops[fetch(pc)](pc)
         return t
 
-    # Interrupts
-
     def trigger_interrupt(new_pc):
         # note that this is the only place pc is used outside of the main loop,
         # as interrupts are the only exception to normal execution
@@ -2191,8 +2180,6 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
             return pc  # interrupt disabled
         trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
 
-    # Registers
-
     def transfer_page_to_oam(page_num):
         nonlocal t
         addr = page_num << 8
@@ -2201,6 +2188,11 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
             ppu_write_oam(fetch(addr+i))
             i += 1
         t = (t+514) & ~1 # 1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles
+    
+    def set_mapper_funcs(cpu_read, cpu_write):
+        nonlocal fetch, store
+        fetch = cpu_read
+        store = cpu_write
 
     return (
         tick,
@@ -2208,6 +2200,7 @@ def create_cpu_funcs(fetch, store, ppu_write_oam, regs=None, t=0, stop_on_brk=Fa
         trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
+        set_mapper_funcs,
         lambda: (pc, s, a, x, y, p)
     )
 
@@ -2219,7 +2212,7 @@ class Cart(object):
         prg_ram_size,
         chr_ram_size,
         trainer,
-        mapper=None,
+        mapper_num=0,
         nt_mirroring=NT_MIRRORING_HORIZONTAL,
         has_non_volatile_memory=False,
         console_flavor=CONSOLE_FLAVOR_NES,
@@ -2230,7 +2223,7 @@ class Cart(object):
         self.prg_ram = array.array('B', (0 for _ in range(prg_ram_size)))
         self.chr_ram = array.array('B', (0 for _ in range(chr_ram_size)))
         self.trainer = trainer
-        self.mapper = mapper or Mapper()
+        self.mapper_num = mapper_num
         self.nt_mirroring = nt_mirroring
         self.has_non_volatile_memory = has_non_volatile_memory  # redundant to prg-nvram once it's adddeds
         self.console_flavor = console_flavor
@@ -2325,14 +2318,14 @@ class Cart(object):
         print(f'Number of 8 KB CHR-ROM banks: {len(self.chr_rom_banks)}')
         print(f'Number PRG-RAM bytes: {len(self.prg_ram)}')
         print(f'Number CHR-RAM bytes: {len(self.chr_ram)}')
-        print(f'Memory mapper: {mapper_names[self.mapper.mapper_num]} ({self.mapper.mapper_num})')
+        print(f'Memory mapper: {mapper_names[self.mapper_num]} ({self.mapper_num})')
         print(f'Has "battery" or other non-volatile memory: {self.has_non_volatile_memory}')
         print(f'Has 512-byte trainer: {self.trainer is not None}')
         print(f'Nametable mirroring: {nt_mirroring_descs[self.nt_mirroring]}')
         print(f'Console flavor: {console_flavors[self.console_flavor]}')
         
-    def connect(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
-        self.mapper.connect(
+    def create_mapper_funcs(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
+        return mappers[self.mapper_num](
             ram,
             vram,
             pals,
@@ -2360,18 +2353,15 @@ class NES(object):
         self.ppu_write_reg,\
         self.ppu_write_oam,\
         self.ppu_pals,\
-        self.ppu_inspect_regs = create_ppu_funcs(
-            cart.mapper.ppu_read,
-            cart.mapper.ppu_write,
-            pal_filepath=pal_filepath)
+        self.ppu_set_mapper_funcs,\
+        self.ppu_inspect_regs = create_ppu_funcs(pal_filepath=pal_filepath)
         self.cpu_tick,\
         self.cpu_trigger_nmi,\
         self.cpu_trigger_reset,\
         self.cpu_trigger_irq,\
         self.cpu_transfer_page_to_oam,\
+        self.cpu_set_mapper_funcs,\
         self.cpu_inspect_regs = create_cpu_funcs(
-            cart.mapper.cpu_read,
-            cart.mapper.cpu_write,
             self.ppu_write_oam,
             regs=cpu_regs,
             t=t,
@@ -2380,7 +2370,10 @@ class NES(object):
             return 0
         def apu_write_reg(addr, value):
             pass
-        cart.connect(
+        self.cpu_read,\
+        self.cpu_write,\
+        self.ppu_read,\
+        self.ppu_write = cart.create_mapper_funcs(
             self.ram,
             self.vram,
             self.ppu_pals(),
@@ -2389,6 +2382,8 @@ class NES(object):
             self.ppu_write_reg,
             apu_read_reg,
             apu_write_reg)
+        self.cpu_set_mapper_funcs(self.cpu_read, self.cpu_write)
+        self.ppu_set_mapper_funcs(self.ppu_read, self.ppu_write)
 
     def play(self):
         t = self.initial_t

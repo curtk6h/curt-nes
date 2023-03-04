@@ -1,7 +1,7 @@
 import unittest
 import array
 
-from curt_nes import Mapper, create_cpu_funcs, create_ppu_funcs, VMStop
+from curt_nes import create_default_mapper_funcs, create_cpu_funcs, create_ppu_funcs, VMStop
 
 class TestMapper(unittest.TestCase):
     sample_ram  = array.array('B', (0x00|(i&0xF) for i in range(0x800)))
@@ -11,7 +11,7 @@ class TestMapper(unittest.TestCase):
         array.array('B', (0x30|(i&0xF) for i in range(0x4000)))
     ]
     sample_prg_ram = array.array('B', (0x40|(i&0xF) for i in range(0x2000)))
-    sample_chr_rom = array.array('B', (0x50|(i&0xF) for i in range(0x2000)))
+    sample_chr_rom_banks = [array.array('B', (0x50|(i&0xF) for i in range(0x2000)))]
     sample_chr_ram = array.array('B', (0x60|(i&0xF) for i in range(0x2000)))
     sample_pals = array.array('B', (i&0xF for i in range(0x20)))
 
@@ -33,14 +33,13 @@ class TestMapper(unittest.TestCase):
             return 0x77
         def apu_write_reg(addr, value):
             apu_writes.append((addr, value))
-        self.mapper = Mapper()
-        self.mapper.connect(
+        self.cpu_read, self.cpu_write, self.ppu_read, self.ppu_write = create_default_mapper_funcs(
             self.sample_ram,
             self.sample_vram,
             self.sample_pals,
             self.sample_prg_rom_banks,
             self.sample_prg_ram,
-            self.sample_chr_rom,
+            self.sample_chr_rom_banks,
             None, # self.sample_chr_ram
             cpu_transfer_page_to_oam,
             ppu_read_reg,
@@ -52,26 +51,26 @@ class TestMapper(unittest.TestCase):
     def test_cpu_io_ram_reads(self):
         # $0000-$07FF	$0800	2KB internal RAM
         for i in range(0x0000, 0x0800):
-            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
+            self.assertEqual(self.cpu_read(i), i&0xF)
         # $0800-$0FFF	$0800	Mirrors of $0000-$07FF
         for i in range(0x0800, 0x1000):
-            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
+            self.assertEqual(self.cpu_read(i), i&0xF)
         # $1000-$17FF	$0800
         for i in range(0x1000, 0x1800):
-            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
+            self.assertEqual(self.cpu_read(i), i&0xF)
         # $1800-$1FFF	$0800
         for i in range(0x1800, 0x2000):
-            self.assertEqual(self.mapper.cpu_read(i), i&0xF)
+            self.assertEqual(self.cpu_read(i), i&0xF)
 
     def test_cpu_io_ppu_mappings(self):
         # $2000-$2007	$0008	NES PPU registers
         for i in range(0x2000, 0x2008):
-            self.mapper.cpu_read(i)
-            self.mapper.cpu_write(i, 0xA0|(i&0xF))
+            self.cpu_read(i)
+            self.cpu_write(i, 0xA0|(i&0xF))
         # $2008-$3FFF	$1FF8	Mirrors of $2000-2007 (repeats every 8 bytes)
         for i in range(0x2008, 0x4000):
-            self.mapper.cpu_read(i)
-            self.mapper.cpu_write(i, 0xB0|(i&0xF))
+            self.cpu_read(i)
+            self.cpu_write(i, 0xB0|(i&0xF))
         self.assertEqual(
             self.ppu_reads,
             [(i%8) for i in range(0x2000, 0x4000)]
@@ -83,52 +82,52 @@ class TestMapper(unittest.TestCase):
         )
 
     def test_cpu_oamdma(self):
-        self.mapper.cpu_write(0x4014, 0x0200)
+        self.cpu_write(0x4014, 0x0200)
         self.assertEqual(self.cpu_transfer_page_to_oam_calls, [0x0200])
 
     def test_cpu_io_apu_mappings(self):
         # $4000-$4017	$0018	NES APU and I/O registers
         for i in range(0x4000, 0x4018):
-            self.mapper.cpu_read(i)
+            self.cpu_read(i)
         # $4018-$401F	$0008	APU and I/O functionality that is normally disabled. See CPU Test Mode.
         for i in range(0x4018, 0x4020):
-            self.mapper.cpu_read(i)
+            self.cpu_read(i)
         self.assertEqual(self.apu_reads, list(range(0x0000, 0x0020)))
 
     def test_cpu_io_misc_cart_mappings(self):
         for i in range(0x4020, 0x6000):
-            self.assertEqual(self.mapper.cpu_read(i), 0)
+            self.assertEqual(self.cpu_read(i), 0)
 
     def test_cpu_io_prg_ram_mappings(self):
         for i in range(0x6000, 0x8000):
-            self.assertEqual(self.mapper.cpu_read(i), 0x40|((i-0x6000)&0xF))
+            self.assertEqual(self.cpu_read(i), 0x40|((i-0x6000)&0xF))
 
     def test_rom_one_bank_mappings(self):
         # $4020-$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (See Note)
         for i in range(0x8000, 0xC000):
-            self.assertEqual(self.mapper.cpu_read(i), 0x20|((i-0x8000)&0xF))
+            self.assertEqual(self.cpu_read(i), 0x20|((i-0x8000)&0xF))
         for i in range(0xC000, 0x10000):
-            self.assertEqual(self.mapper.cpu_read(i), 0x30|((i-0xC000)&0xF))
+            self.assertEqual(self.cpu_read(i), 0x30|((i-0xC000)&0xF))
 
 class TestCPU(unittest.TestCase):
-    def _build_mapper_and_cpu(self, prg_rom, regs, chr_rom=None, mapper_cls=Mapper):
+    def _build_mapper_and_cpu(self, prg_rom, regs):
         self.ppu_reads  = []
         self.ppu_writes = []
         self.ppu_oam_writes = []
         self.apu_reads  = []
         self.apu_writes = []
-        ram  = array.array('B', (0 for _ in range(0x800)))
-        vram = array.array('B', (0 for _ in range(0x800)))
-        prg_ram = b''
-        prg_rom_banks = [
+        self.ram  = array.array('B', (0 for _ in range(0x800)))
+        self.vram = array.array('B', (0 for _ in range(0x800)))
+        self.prg_ram = b''
+        self.prg_rom_banks = [
             array.array('B', (0 for _ in range(0x4000))),
             array.array('B', (0 for _ in range(0x4000)))
         ]
-        chr_rom_banks = []
-        chr_ram = b''
-        pals = array.array('B', (i&0xF for i in range(0x20)))
+        self.chr_rom_banks = []
+        self.chr_ram = b''
+        self.pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
-            prg_rom_banks[0][i] = value
+            self.prg_rom_banks[0][i] = value
         def ppu_read_reg(addr):
             self.ppu_reads.append(addr)
             return 0x55
@@ -142,28 +141,29 @@ class TestCPU(unittest.TestCase):
         def apu_write_reg(addr, value):
             self.apu_writes.append((addr, value))
 
-        mapper = Mapper()
-        cpu_funcs = create_cpu_funcs(mapper.cpu_read, mapper.cpu_write, ppu_write_oam, regs=regs, stop_on_brk=True)
-        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_inspect_regs = cpu_funcs
-        mapper.connect(
-            ram,
-            vram,
-            pals,
-            prg_rom_banks,
-            prg_ram,
-            chr_rom_banks,
-            chr_ram,
+        cpu_funcs = create_cpu_funcs(ppu_write_oam, regs=regs, stop_on_brk=True)
+        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_set_mapper_funcs, cpu_inspect_regs = cpu_funcs
+        cpu_read, cpu_write, ppu_read, ppu_write = mapper_funcs = create_default_mapper_funcs(
+            self.ram,
+            self.vram,
+            self.pals,
+            self.prg_rom_banks,
+            self.prg_ram,
+            self.chr_rom_banks,
+            self.chr_ram,
             cpu_transfer_page_to_oam,
             ppu_read_reg,
             ppu_write_reg,
             apu_read_reg,
             apu_write_reg)
 
-        return mapper, cpu_funcs
+        cpu_set_mapper_funcs(cpu_read, cpu_write)
+
+        return mapper_funcs, cpu_funcs
 
     def _test_play(self, prg_rom, expected_regs, expected_t, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, ram_patches=[], expected_ram_patches=[], prg_rom_patches=[], expected_prg_rom_patches=[], expected_ppu_reads=[], expected_ppu_writes=[], expected_ppu_oam_writes=[]):
-        mapper, cpu_funcs = self._build_mapper_and_cpu(prg_rom, (pc, s, a, x, y, p))
-        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_insepect_regs = cpu_funcs
+        mapper_funcs, cpu_funcs = self._build_mapper_and_cpu(prg_rom, (pc, s, a, x, y, p))
+        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_set_mapper_funcs, cpu_insepect_regs = cpu_funcs
 
         def cpu_tick_forever():
             try:
@@ -175,15 +175,15 @@ class TestCPU(unittest.TestCase):
         # Patch memory before running
         for i, values in ram_patches:
             for j, value in enumerate(values):
-                mapper.ram[i+j] = value
+                self.ram[i+j] = value
 
         for i, values in prg_rom_patches:
             for j, value in enumerate(values):
                 final_i = (i+j) - 0x8000
-                mapper.prg_rom_banks[final_i//0x4000][final_i%0x4000] = value
+                self.prg_rom_banks[final_i//0x4000][final_i%0x4000] = value
 
-        expected_ram = bytearray(mapper.ram)
-        expected_prg_rom = bytearray(b''.join(mapper.prg_rom_banks))
+        expected_ram = bytearray(self.ram)
+        expected_prg_rom = bytearray(b''.join(self.prg_rom_banks))
 
         # Run program!
         t = cpu_tick_forever()
@@ -194,11 +194,11 @@ class TestCPU(unittest.TestCase):
         for start, expected_ram_bytes in expected_ram_patches:
             end = start + len(expected_ram_bytes)
             self.assertEqual(
-                bytearray(mapper.ram[start:end]),
+                bytearray(self.ram[start:end]),
                 expected_ram_bytes)
-            expected_ram[start:end] = mapper.ram[start:end]
+            expected_ram[start:end] = self.ram[start:end]
 
-        actual_prg_rom = b''.join(mapper.prg_rom_banks)
+        actual_prg_rom = b''.join(self.prg_rom_banks)
         for start, expected_prg_rom_bytes in expected_prg_rom_patches:
             end = start + len(expected_prg_rom_bytes)
             self.assertEqual(
@@ -207,8 +207,8 @@ class TestCPU(unittest.TestCase):
             expected_prg_rom[start:end] = actual_prg_rom[start:end]
 
         # Ensure memory other than what was patched, wasn't touched
-        self.assertEqual(mapper.ram, expected_ram)
-        self.assertEqual(b''.join(mapper.prg_rom_banks), expected_prg_rom)
+        self.assertEqual(self.ram, expected_ram)
+        self.assertEqual(b''.join(self.prg_rom_banks), expected_prg_rom)
 
         if expected_t is not None:
             self.assertEqual(t, expected_t)
@@ -663,52 +663,48 @@ class TestPPU(unittest.TestCase):
         self.ppu_writes = []
         self.apu_reads  = []
         self.apu_writes = []
-        ram  = array.array('B', (0 for _ in range(0x800)))
-        vram = array.array('B', (0 for _ in range(0x800)))
-        prg_ram = b''
-        prg_rom_banks = [
+        self.ram  = array.array('B', (0 for _ in range(0x800)))
+        self.vram = array.array('B', (0 for _ in range(0x800)))
+        self.prg_ram = b''
+        self.prg_rom_banks = [
             array.array('B', (0 for _ in range(0x4000))),
             array.array('B', (0 for _ in range(0x4000)))
         ]
-        chr_rom_banks = []
-        chr_ram = b''
-        pals = array.array('B', (i&0xF for i in range(0x20)))
+        self.chr_rom_banks = []
+        self.chr_ram = b''
+        self.pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
-            prg_rom_banks[0][i] = value
+            self.prg_rom_banks[0][i] = value
         def cpu_transfer_page_to_oam(page_num):
             self.cpu_transfer_page_to_oam_calls.append(page_num)
-        def ppu_read_reg(addr):
-            self.ppu_reads.append(addr)
-            return 0x55
-        def ppu_write_reg(addr, value):
-            self.ppu_writes.append((addr, value))
         def apu_read_reg(addr):
             self.apu_reads.append(addr)
             return 0x77
         def apu_write_reg(addr, value):
             self.apu_writes.append((addr, value))
-        self.mapper = mapper = Mapper()
 
-        ppu_funcs = create_ppu_funcs(mapper.ppu_read, mapper.ppu_write, **ppu_regs)
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, inspect_regs = ppu_funcs
-        mapper.connect(
-            ram,
-            vram,
-            pals,
-            prg_rom_banks,
-            prg_ram,
-            chr_rom_banks,
-            chr_ram,
+        self.ppu_funcs = create_ppu_funcs(**ppu_regs)
+        self.ppu_read_reg, self.ppu_write_reg, self.ppu_write_oam, self.ppu_pals, self.ppu_set_mapper_funcs, self.ppu_inspect_regs = self.ppu_funcs
+        self.cpu_read, self.cpu_write, self.ppu_read, self.ppu_write = self.mapper_funcs = create_default_mapper_funcs(
+            self.ram,
+            self.vram,
+            self.pals,
+            self.prg_rom_banks,
+            self.prg_ram,
+            self.chr_rom_banks,
+            self.chr_ram,
             cpu_transfer_page_to_oam,
-            ppu_read_reg,
-            ppu_write_reg,
+            self.ppu_read_reg,
+            self.ppu_write_reg,
             apu_read_reg,
             apu_write_reg)
 
-        return ppu_funcs
+        self.ppu_set_mapper_funcs(self.ppu_read, self.ppu_write)
+
+        return self.ppu_funcs
 
     def test_ppu_write_oam(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         sample_oam = [(i+80)&0xFF for i in range(0x100)]
         # test writing a whole page, as if through cpu oam dma
         for i, x in enumerate(sample_oam):
@@ -724,7 +720,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['oam'], bytearray(sample_oam))
 
     def test_ppuctrl_before_30000_cycles(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # check initial state
         ppu = ppu_inspect_regs()
         self.assertEqual(ppu['ppu_ctrl'], 0x00)
@@ -737,7 +733,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['reg_io_write_state'], 8) # TODO: figure out if this is expected (before 30k cycles no write, does tmp_addr write state change)
 
     def test_ppuctrl(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
         # initial write
         ppu_write_reg(0, 0xAA)
         ppu = ppu_inspect_regs()
@@ -769,7 +765,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_ctrl'], 0x80)
 
     def test_ppuctrl_trigger_nmi(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000, ppu_status=0x80)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000, ppu_status=0x80)
         # flip bit to "generate an NMI", not already on, in vblank
         self.assertRaises(ValueError, ppu_write_reg, 0, 0x80)
         # flip bit to "generate an NMI", already on, in vblank
@@ -778,7 +774,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_ctrl'], 0x80)
 
     def test_ppumask(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # initial write
         ppu_write_reg(1, 0xAA)
         ppu = ppu_inspect_regs()
@@ -803,7 +799,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_mask'], 0x00)
 
     def test_ppustatus(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # write attempt
         ppu_write_reg(2, 0xAA)
         ppu = ppu_inspect_regs()
@@ -816,7 +812,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['reg_io_write_state'], 0)
 
     def test_ppustatus_clear_vblank(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', reg_io_value=0xAA, ppu_status=0xFF)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', reg_io_value=0xAA, ppu_status=0xFF)
         # another read
         self.assertEqual(ppu_read_reg(2), 0xEA)
         ppu = ppu_inspect_regs()
@@ -824,7 +820,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_status'], 0x7F)  # 7 bit (vblank) is cleared after read
 
     def test_oamaddr(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # initial write
         ppu_write_reg(3, 0xAA)
         ppu = ppu_inspect_regs()
@@ -851,7 +847,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['oam_addr'], 0x00)
 
     def test_oamdata(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # initial write
         ppu_write_reg(4, 0x55)
         ppu = ppu_inspect_regs()
@@ -883,7 +879,7 @@ class TestPPU(unittest.TestCase):
         # effectively hiding any sprites before the starting OAMADDR.
 
     def test_oamdata_wrap_oamaddr(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', oam_addr=0xFF)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', oam_addr=0xFF)
         # third write, then wrap oamaddr
         ppu_write_reg(4, 0x55)
         ppu = ppu_inspect_regs()
@@ -891,7 +887,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['oam_addr'], 0x00)
 
     def test_ppuscroll(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # first write
         ppu_write_reg(5, 0xFF)
         ppu = ppu_inspect_regs()
@@ -910,7 +906,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['fine_x_scroll'], 0x07)
 
     def test_ppuscroll_check_unused_bits(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0xFFFF)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0xFFFF)
         # write zero, first
         ppu_write_reg(5, 0x00)
         ppu = ppu_inspect_regs()
@@ -940,7 +936,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['reg_io_write_state'], 0)
 
     def test_ppuaddr(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'')
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'')
         # first write 0xFF
         ppu_write_reg(6, 0xFF)
         ppu = ppu_inspect_regs()
@@ -987,15 +983,15 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['reg_io_write_state'], 0)
    
     def test_ppudata(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2000)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2000)
         # initialize values
-        self.mapper.vram[0x0000] = 0x00
-        self.mapper.vram[0x0001] = 0xAA
-        self.mapper.vram[0x0002] = 0xAA
+        self.vram[0x0000] = 0x00
+        self.vram[0x0001] = 0xAA
+        self.vram[0x0002] = 0xAA
         # write
         ppu_write_reg(7, 0xFF)
         ppu = ppu_inspect_regs()
-        self.assertEqual(tuple(self.mapper.vram[0:3]), (0xFF, 0xAA, 0xAA))
+        self.assertEqual(tuple(self.vram[0:3]), (0xFF, 0xAA, 0xAA))
         self.assertEqual(ppu['reg_io_value'], 0xFF)
         self.assertEqual(ppu['reg_io_write_state'], 8)
         self.assertEqual(ppu['fine_x_scroll'], 0x00)
@@ -1004,7 +1000,7 @@ class TestPPU(unittest.TestCase):
         # second write
         ppu_write_reg(7, 0x55)
         ppu = ppu_inspect_regs()
-        self.assertEqual(tuple(self.mapper.vram[0:3]), (0xFF, 0x55, 0xAA))
+        self.assertEqual(tuple(self.vram[0:3]), (0xFF, 0x55, 0xAA))
         self.assertEqual(ppu['reg_io_value'], 0x55)
         self.assertEqual(ppu['reg_io_write_state'], 0)
         self.assertEqual(ppu['fine_x_scroll'], 0x00)
@@ -1012,15 +1008,15 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_addr'], 0x2002)
         
     def test_ppudata_increment_32(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2000, ppu_ctrl=0x04)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2000, ppu_ctrl=0x04)
         # initialize values
-        self.mapper.vram[0x0000] = 0xFF
-        self.mapper.vram[0x0001] = 0x55
-        self.mapper.vram[0x0002] = 0xAA
+        self.vram[0x0000] = 0xFF
+        self.vram[0x0001] = 0x55
+        self.vram[0x0002] = 0xAA
         # third write, after changing increment to 32
         ppu_write_reg(7, 0xAA)
         ppu = ppu_inspect_regs()
-        self.assertEqual(tuple(self.mapper.vram[0:3]), (0xAA, 0x55, 0xAA))
+        self.assertEqual(tuple(self.vram[0:3]), (0xAA, 0x55, 0xAA))
         self.assertEqual(ppu['reg_io_value'], 0xAA)
         self.assertEqual(ppu['reg_io_write_state'], 8)
         self.assertEqual(ppu['fine_x_scroll'], 0x00)
@@ -1028,11 +1024,11 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_addr'], 0x2020)
 
     def test_ppudata_buffer(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2001)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x2001)
         # initialize values
-        self.mapper.vram[0x0000] = 0xFF
-        self.mapper.vram[0x0001] = 0x55
-        self.mapper.vram[0x0002] = 0xAA
+        self.vram[0x0000] = 0xFF
+        self.vram[0x0001] = 0x55
+        self.vram[0x0002] = 0xAA
         # read buffer garbage
         self.assertEqual(ppu_read_reg(7), 0x00)
         ppu = ppu_inspect_regs()
@@ -1059,11 +1055,11 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_addr'], 0x2004)
 
     def test_ppudata_read_mirrors(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x3000)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x3000)
         # initialize values
-        self.mapper.vram[0x0000] = 0xFF
-        self.mapper.vram[0x0001] = 0x55
-        self.mapper.vram[0x0002] = 0xAA
+        self.vram[0x0000] = 0xFF
+        self.vram[0x0001] = 0x55
+        self.vram[0x0002] = 0xAA
         # read mirror 0x3000
         self.assertEqual(ppu_read_reg(7), 0x00)
         ppu = ppu_inspect_regs()
@@ -1084,10 +1080,10 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_data'], 0x55)
 
     def test_ppudata_read_pals(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x3F00)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', tmp_addr=0x2000, ppu_addr=0x3F00)
         # initialize values
-        self.mapper.vram[0x0700] = 0x88
-        self.mapper.pals[0x0000] = 0x77
+        self.vram[0x0700] = 0x88
+        self.pals[0x0000] = 0x77
         # read directly from pal
         self.assertEqual(ppu_read_reg(7), 0x77)
         ppu = ppu_inspect_regs()
@@ -1099,7 +1095,7 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['ppu_data'], 0x88) # nametable value mirrored "under" the palette
      
     def test_ppu_scrolling_example_from_wiki(self):
-        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
+        ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
 
         # $2000 write
         # t: ...GH.. ........ <- d: ......GH
