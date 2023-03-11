@@ -6,9 +6,18 @@
 
 # TODO:
 # * implement rendering
+#   * finish rendering functions: implement missing, double check all
+#   * finish laying out bg scanline rendering
+#   * double check pixel rendering
+#   * generate nmi on vblank
+#   * add sprites
+#   * double check flags and controls
+#   * review docs for glitches, exceptions, etc.
 # * tick / figure out initialization/syncing w/ cpu
 # * remove unused constants etc
 # * add pygame and draw to screen
+# * handle controllers
+# * try out test ROMs!
 # * rename: crazyNES, coolNES, nneess, HI-NES (crown icon)
 # * default status to unused = 1 and removed redundant sets
 # * lots of cleanup / refactoring
@@ -606,39 +615,101 @@ def create_ppu_funcs(
     """
     fetch = store = None
     oam = array.array('B', (0 for _ in range(0x100)))
-    frame_num = 0
-    scanline_idx = 0
     pals = array.array('B', (0 for _ in range(0x20)))
     rgbs = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
-    scanline_num = 0
+    frame_num = 0
+    frame_t = t
+    pixel_idx = 0
+    pt_idx = 0
+
+    # rendering registers/latches/memory
+    # background
+    tile_0       = 0x0000 # AABB
+    tile_1       = 0x0000 # AABB
+    attr_0       = 0x00   # aa
+    attr_1       = 0x00   # aa
+    attr_n       = 0x00   # AA
+    # sprites
+    scanline_oam = array.array('B', (0 for _ in range(0x20)))
+    spr_tiles_0  = array.array('B', (0 for _ in range(8))) # 8 pairs of 8-bit shift registers 
+    spr_tiles_1  = array.array('B', (0 for _ in range(8))) # 
+    spr_attrs    = array.array('B', (0 for _ in range(8))) # 8 latches - These contain the attribute bytes for up to 8 sprites
+    spr_x_pos    = array.array('B', (0 for _ in range(8))) # 8 counters - These contain the X positions for up to 8 sprites.
+
+    def render_pixel():
+        nonlocal pixel_idx
+        pixel = ((tile_0>>fine_x_scroll)|(tile_1>>fine_x_scroll<<1)) & 0x03  # is this actually 8 - fine_x_scroll ?
+        # TODO: use attr_0 too and lookup value in palette
+        tile_0 >>= 1
+        tile_1 >>= 1
+        screen[pixel_idx] = pixel
+        pixel_idx += 1
 
     def idle():
-        nonlocal t
-        t += 1
+        pass
     def fetch_bg_0_addr_only():
-        pass
+        (((ppu_ctrl&0x10)<<8)|pt_idx|0|(ppu_addr>>12)) # no reason to actually do this
     def fetch_nt():
-        pass
+        nonlocal pt_idx
+        # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____
+        pt_idx = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
     def fetch_at():
-        pass
+        nonlocal attr_n
+        # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
+        attr_byte = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
+        # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 00YX
+        attr_n = (attr_byte >> (((ppu_addr&0x0040)>>6)|((ppu_addr&0x0002)>>1))) & 3
     def fetch_bg_0():
-        pass
+        nonlocal tile_0
+        # __0H RRRR CCCC 0TTT
+        tile_0 |= fetch(((ppu_ctrl&0x10)<<8)|pt_idx|0|(ppu_addr>>12)) << 8
     def fetch_bg_1():
-        pass
+        nonlocal tile_1
+        # __0H RRRR CCCC 1TTT
+        tile_1 |= fetch(((ppu_ctrl&0x10)<<8)|pt_idx|8|(ppu_addr>>12)) << 8
     def inc_x():
-        pass
+        nonlocal ppu_addr
+        x = (ppu_addr&0x001F) + 1
+        ppu_addr ^= (ppu_addr^(((x&0x20)<<5)|x)) & 0x041F
     def inc_xy():
-        pass
+        nonlocal ppu_addr
+        # DOUBLE CHECK ALL THIS
+        x = (ppu_addr&0x001F) + 1
+        fine_y = (ppu_addr&0x7000) + 1
+        y = (ppu_addr&0x03E0) + ((fine_y&0x8000)>>10)
+        ppu_addr  = (fine_y&0x7000) | ((y&0x1000)<<1) | ((x&0x0020)<<5) | (y&0x03E0) | (x&0x001F)
+    def fetch_bg_1_inc_x():
+        fetch_bg_1()
+        inc_x()
+    def fetch_bg_1_inc_xy():
+        fetch_bg_1()
+        inc_xy()
     def reset_x():
-        pass
-    visible_scanline_funcs = [idle()] * 340
-    idle_scanline_funcs = [idle()] * 340
-    vblank_scanline_funcs = [idle()] * 340
-    pre_render_scanline_funcs = [idle()] * 340
+        nonlocal ppu_addr
+        ppu_addr ^= (ppu_addr^tmp_addr) & 0x001F
+    def reset_y():
+        nonlocal ppu_addr
+        ppu_addr ^= (ppu_addr^tmp_addr) & 0x03E0
+    def set_vblank_flag():
+        nonlocal ppu_status
+        ppu_status |= 0x80
+    def clear_flags():
+        nonlocal ppu_status
+        ppu_status &= 0x1F
+    visible_scanline_funcs = [idle, fetch_nt] * 340
+    idle_scanline_funcs = [idle] * 340
+    vblank_scanline_funcs = [idle] * 340
+    pre_render_scanline_funcs = [idle] * 340
     
     tick_funcs = [visible_scanline_funcs] * 240 + [idle_scanline_funcs] * (262-240)
     tick_funcs[241] = vblank_scanline_funcs
     tick_funcs[261] = pre_render_scanline_funcs
+
+    def tick():
+        nonlocal t
+        tick_funcs[t-frame_t]()
+        render_pixel()
+        t += 1
 
     def read_nothing():
         pass
@@ -763,7 +834,7 @@ def create_ppu_funcs(
         store = ppu_write
 
     return (
-        lambda: tick_funcs[scanline_num][t](),
+        tick,
         read_reg,
         write_reg,
         write_oam,

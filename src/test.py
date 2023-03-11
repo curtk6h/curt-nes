@@ -1179,6 +1179,10 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['tmp_addr'], 0x15AA)
         self.assertEqual(ppu['fine_x_scroll'], 0x02)
         self.assertEqual(ppu['ppu_addr'], 0x15AA)
+
+    def test_ppu_rendering(self):
+        ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_set_mapper_funcs, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
+        ppu_tick()
             
 if __name__ == "__main__":
     unittest.main()
