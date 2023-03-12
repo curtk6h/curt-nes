@@ -669,21 +669,22 @@ def create_ppu_funcs(
         tile_1 |= fetch(((ppu_ctrl&0x10)<<8)|pt_idx|8|(ppu_addr>>12)) << 8
     def inc_x():
         nonlocal ppu_addr
+        # _yyy NNYY YYYX XXXX => _yyy NnYY YYYx xxxx (x=X+1, n=carry)
         x = (ppu_addr&0x001F) + 1
-        ppu_addr ^= (ppu_addr^(((x&0x20)<<5)|x)) & 0x041F
+        ppu_addr ^= (ppu_addr^((x<<5)|x)) & 0x041F
     def inc_xy():
         nonlocal ppu_addr
-        # DOUBLE CHECK ALL THIS
-        x = (ppu_addr&0x001F) + 1
-        fine_y = (ppu_addr&0x7000) + 1
-        y = (ppu_addr&0x03E0) + ((fine_y&0x8000)>>10)
-        ppu_addr  = (fine_y&0x7000) | ((y&0x1000)<<1) | ((x&0x0020)<<5) | (y&0x03E0) | (x&0x001F)
-    def fetch_bg_1_inc_x():
-        fetch_bg_1()
-        inc_x()
-    def fetch_bg_1_inc_xy():
-        fetch_bg_1()
-        inc_xy()
+        # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
+        fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and corase x, at the same time
+        y = (ppu_addr&0x03E0) + (fine_y_x>>10)  # add fine y to coarse y (w/ garbage coarse x bits)
+        ppu_addr  = ((y&0x0400)<<1) | (y&0x03E0) | (((fine_y_x<<5)|fine_y_x)&0x741F)
+    # each op takes ~2 cycles but really only happens in 1, these can happen sequentially
+    # def fetch_bg_1_inc_x():
+    #     fetch_bg_1()
+    #     inc_x()
+    # def fetch_bg_1_inc_xy():
+    #     fetch_bg_1()
+    #     inc_xy()
     def reset_x():
         nonlocal ppu_addr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x001F
