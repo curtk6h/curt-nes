@@ -613,22 +613,25 @@ def create_ppu_funcs(
         inspect_regs
     )
     """
-    fetch = store = None
-    oam = array.array('B', (0 for _ in range(0x100)))
-    pals = array.array('B', (0 for _ in range(0x20)))
-    rgbs = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
-    frame_num = 0
-    frame_t = t
-    pixel_idx = 0
-    pt_idx = 0
+    fetch        = None
+    store        = None
+    oam          = array.array('B', (0 for _ in range(0x100)))
+    pals         = array.array('B', (0 for _ in range(0x20)))
+    rgbs         = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
+    frame_num    = 0
+    frame_t      = t
+    pixel_idx    = 0
+    pattern_idx  = 0
 
     # rendering registers/latches/memory
     # background
     tile_0       = 0x0000 # AABB
     tile_1       = 0x0000 # AABB
-    attr_0       = 0x00   # aa
-    attr_1       = 0x00   # aa
-    attr_n       = 0x00   # AA
+    next_0       = 0x0000 # CC (next tile lo-bits to be loaded into BB)
+    next_1       = 0x0000 # CC (next tile hi-bits to be loaded into BB)
+    attr         = 0x0    # 2 bit attr (not bothering to implement this literally)
+    attr_n       = 0x0    # next 2 bit attr
+
     # sprites
     scanline_oam = array.array('B', (0 for _ in range(0x20)))
     spr_tiles_0  = array.array('B', (0 for _ in range(8))) # 8 pairs of 8-bit shift registers 
@@ -638,62 +641,67 @@ def create_ppu_funcs(
 
     def render_pixel():
         nonlocal pixel_idx
-        pixel = ((tile_0>>fine_x_scroll)|(tile_1>>fine_x_scroll<<1)) & 0x03  # is this actually 8 - fine_x_scroll ?
-        # TODO: use attr_0 too and lookup value in palette
-        tile_0 >>= 1
-        tile_1 >>= 1
-        screen[pixel_idx] = pixel
+        screen[pixel_idx] = pals[attr|((((tile_0<<(fine_x_scroll-1))|(tile_1<<fine_x_scroll))&0xC000)>>16)]
         pixel_idx += 1
+        tile_0    <<= 1  # this leaves garbage in upper bits,
+        tile_1    <<= 1  # but should be fine
 
     def idle():
         pass
     def fetch_bg_0_addr_only():
-        (((ppu_ctrl&0x10)<<8)|pt_idx|0|(ppu_addr>>12)) # no reason to actually do this
+        pass  # (((ppu_ctrl&0x10)<<8)|pattern_idx|0|(ppu_addr>>12))  # no reason to actually do this
     def fetch_nt():
-        nonlocal pt_idx
+        nonlocal pattern_idx
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____
         pt_idx = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
     def fetch_at():
         nonlocal attr_n
         # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
-        attr_byte = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
+        attr_quad = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
         # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 00YX
-        attr_n = (attr_byte >> (((ppu_addr&0x0040)>>6)|((ppu_addr&0x0002)>>1))) & 3
+        attr_n = ((attr_quad>>(((ppu_addr&0x0040)>>4)|(ppu_addr&0x0002)))&3) << 2
     def fetch_bg_0():
-        nonlocal tile_0
+        nonlocal next_0
         # __0H RRRR CCCC 0TTT
-        tile_0 |= fetch(((ppu_ctrl&0x10)<<8)|pt_idx|0|(ppu_addr>>12)) << 8
+        next_0 = fetch(((ppu_ctrl&0x10)<<8)|pattern_idx|0|(ppu_addr>>12))
     def fetch_bg_1():
-        nonlocal tile_1
+        nonlocal next_1
         # __0H RRRR CCCC 1TTT
-        tile_1 |= fetch(((ppu_ctrl&0x10)<<8)|pt_idx|8|(ppu_addr>>12)) << 8
+        next_1 = fetch(((ppu_ctrl&0x10)<<8)|pattern_idx|8|(ppu_addr>>12))
     def inc_x():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, tile_0, tile_1, attr
         # _yyy NNYY YYYX XXXX => _yyy NnYY YYYx xxxx (x=X+1, n=carry)
         x = (ppu_addr&0x001F) + 1
         ppu_addr ^= (ppu_addr^((x<<5)|x)) & 0x041F
+        # load shifters with next tile
+        tile_0 |= next_0
+        tile_1 |= next_1
+        attr = attr_n
     def inc_xy():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, tile_0, tile_1, attr
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
         fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and corase x, at the same time
         y = (ppu_addr&0x03E0) + (fine_y_x>>10)  # add fine y to coarse y (w/ garbage coarse x bits)
         ppu_addr  = ((y&0x0400)<<1) | (y&0x03E0) | (((fine_y_x<<5)|fine_y_x)&0x741F)
-    # each op takes ~2 cycles but really only happens in 1, these can happen sequentially
-    # def fetch_bg_1_inc_x():
-    #     fetch_bg_1()
-    #     inc_x()
-    # def fetch_bg_1_inc_xy():
-    #     fetch_bg_1()
-    #     inc_xy()
+        # load shifters with next tile
+        tile_0 |= next_0
+        tile_1 |= next_1
+        attr = attr_n
     def reset_x():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, tile_0, tile_1, attr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x001F
+        # load shifters with next tile
+        tile_0 |= next_0
+        tile_1 |= next_1
+        attr = attr_n
     def reset_y():
         nonlocal ppu_addr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x03E0
-    def set_vblank_flag():
+        # this probably loads shifters? shouldn't need to emulate it, though
+    def set_vblank_flag_and_trigger_nmi():
         nonlocal ppu_status
         ppu_status |= 0x80
+        # TODO: trigger NMI here!
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
