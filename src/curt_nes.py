@@ -11,6 +11,7 @@
 #   * add sprites
 #   * double check flags and controls
 #   * review docs for glitches, exceptions, etc.
+# * test interrupts
 # * tick / figure out initialization/syncing w/ cpu
 # * remove unused constants etc
 # * add pygame and draw to screen
@@ -525,12 +526,13 @@ def create_ppu_funcs(
         write_reg,
         write_oam,
         pals,
-        set_mapper_funcs,
+        connect,
         inspect_regs
     )
     """
     fetch        = None
     store        = None
+    trigger_nmi  = None
     oam          = array.array('B', (0 for _ in range(0x100)))
     pals         = array.array('B', (0 for _ in range(0x20)))
     frame_num    = 0
@@ -613,10 +615,11 @@ def create_ppu_funcs(
         nonlocal ppu_addr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x03E0
         # this probably loads shifters? shouldn't need to emulate it, though
-    def set_vblank_flag_and_trigger_nmi():
+    def set_vblank_flag():
         nonlocal ppu_status
         ppu_status |= 0x80
-        # TODO: trigger NMI here!
+        if ppu_ctrl & 0x80:
+            trigger_nmi()
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
@@ -752,10 +755,11 @@ def create_ppu_funcs(
         oam[oam_addr] = value
         oam_addr = (oam_addr+1) & 0xFF
 
-    def set_mapper_funcs(ppu_read, ppu_write):
-        nonlocal fetch, store
+    def connect(ppu_read, ppu_write, cpu_trigger_nmi):
+        nonlocal fetch, store, trigger_nmi
         fetch = ppu_read
         store = ppu_write
+        trigger_nmi = cpu_trigger_nmi
 
     return (
         tick,
@@ -763,7 +767,7 @@ def create_ppu_funcs(
         write_reg,
         write_oam,
         lambda: pals,  # return internal pals storage,
-        set_mapper_funcs,
+        connect,
         lambda: dict(  # return internal regs / mem for testing purposes
             oam=oam,
             reg_io_value=reg_io_value,
@@ -780,7 +784,7 @@ def create_ppu_funcs(
         )
     )
 
-def create_cpu_funcs(ppu_write_oam, regs=None, t=0, stop_on_brk=False):
+def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
     """
     The CPU is represented as a tuple of functions:
     (
@@ -789,13 +793,13 @@ def create_cpu_funcs(ppu_write_oam, regs=None, t=0, stop_on_brk=False):
         trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
-        set_mapper_funcs,
+        connect,
         inspect_regs
     )
     """
 
-    fetch = store = None
-
+    fetch = store = write_oam = None
+    
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
     
     # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
@@ -2180,14 +2184,15 @@ def create_cpu_funcs(ppu_write_oam, regs=None, t=0, stop_on_brk=False):
         addr = page_num << 8
         i = 0
         while i < 0x100:
-            ppu_write_oam(fetch(addr+i))
+            write_oam(fetch(addr+i))
             i += 1
         t = (t+514) & ~1 # 1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles
     
-    def set_mapper_funcs(cpu_read, cpu_write):
-        nonlocal fetch, store
+    def connect(cpu_read, cpu_write, ppu_write_oam):
+        nonlocal fetch, store, write_oam
         fetch = cpu_read
         store = cpu_write
+        write_oam = ppu_write_oam
 
     return (
         tick,
@@ -2195,7 +2200,7 @@ def create_cpu_funcs(ppu_write_oam, regs=None, t=0, stop_on_brk=False):
         trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
-        set_mapper_funcs,
+        connect,
         lambda: (pc, s, a, x, y, p)
     )
 
@@ -2346,7 +2351,7 @@ class NES(object):
         self.ppu_write_reg,\
         self.ppu_write_oam,\
         self.ppu_pals,\
-        self.ppu_set_mapper_funcs,\
+        self.ppu_connect,\
         self.ppu_inspect_regs = \
             create_ppu_funcs(screen)
         self.cpu_tick,\
@@ -2354,10 +2359,9 @@ class NES(object):
         self.cpu_trigger_reset,\
         self.cpu_trigger_irq,\
         self.cpu_transfer_page_to_oam,\
-        self.cpu_set_mapper_funcs,\
+        self.cpu_connect,\
         self.cpu_inspect_regs = \
             create_cpu_funcs(
-                self.ppu_write_oam,
                 regs=cpu_regs,
                 t=t,
                 stop_on_brk=False)
@@ -2377,8 +2381,8 @@ class NES(object):
             self.ppu_write_reg,
             apu_read_reg,
             apu_write_reg)
-        self.cpu_set_mapper_funcs(self.cpu_read, self.cpu_write)
-        self.ppu_set_mapper_funcs(self.ppu_read, self.ppu_write)
+        self.cpu_connect(self.cpu_read, self.cpu_write, self.ppu_write_oam)
+        self.ppu_connect(self.ppu_read, self.ppu_write, self.cpu_trigger_nmi)
 
     def play(self):
         t = self.initial_t
