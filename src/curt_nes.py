@@ -6,9 +6,7 @@
 
 # TODO:
 # * implement rendering
-#   * finish rendering functions: implement missing, double check all
 #   * finish laying out bg scanline rendering
-#   * double check pixel rendering
 #   * generate nmi on vblank
 #   * add sprites
 #   * double check flags and controls
@@ -32,8 +30,6 @@
 
 import array
 import os
-
-DEFAULT_PAL_FILEPATH = 'ntscpalette.pal'  # thanks to https://bisqwit.iki.fi/utils/nespalette.php
 
 # Memory addressing
 ZERO_PAGE_OFFSET         = 0x0000
@@ -217,6 +213,8 @@ CONSOLE_FLAVOR_NES = 0
 CONSOLE_FLAVOR_VS_SYSTEM = 1
 CONSOLE_FLAVOR_PLAYCHOICE_10 = 2
 CONSOLE_FLAVOR_OTHER = 3
+
+NTSC_PALETTE = 'RRR\x01\x1aQ\x0f\x0fe#\x06c6\x03K@\x04&?\t\x042\x13\x00\x1f \x00\x0b*\x00\x00/\x00\x00.\n\x00&-\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa0\xa0\xa0\x1eJ\x9d87\xbcX(\xb8u!\x94\x84#\\\x82.$o?\x00QR\x001c\x00\x1ak\x05\x0ei.\x10\\h\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfe\xff\xffi\x9e\xfc\x89\x87\xff\xaev\xff\xcem\xf1\xe0p\xb2\xde|p\xc8\x91>\xa6\xa7%\x81\xba(c\xc4FT\xc1}V\xb3\xc0<<<\x00\x00\x00\x00\x00\x00\xfe\xff\xff\xbe\xd6\xfd\xcc\xcc\xff\xdd\xc4\xff\xea\xc0\xf9\xf2\xc1\xdf\xf1\xc7\xc2\xe8\xd0\xaa\xd9\xda\x9d\xc9\xe2\x9e\xbc\xe6\xae\xb4\xe5\xc7\xb5\xdf\xe4\xa9\xa9\xa9\x00\x00\x00\x00\x00\x00'
 
 class VMStop(Exception):
     pass
@@ -500,92 +498,11 @@ mappers = [create_default_mapper_funcs]
 def signed8(value):
     return ((value&0xFF)^0x80) - 0x80
 
-def _load_pal_from_file(pal_filepath):
+def load_pal_from_file(pal_filepath='ntscpalette.pal'):
+    # thanks to https://bisqwit.iki.fi/utils/nespalette.php
     with open(pal_filepath, 'rb') as pal_file:
         pal_bytes = pal_file.read()
         return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
-
-class PPU(object):
-    def render(self, t_elapsed):
-        pixel_idx = 0
-        screen = array.array('B', (0 for _ in range(256*240)))
-        # background
-        tile_0 = 0x0000 # AABB
-        tile_1 = 0x0000 # AABB
-        attr_0 = 0x00   # aa
-        attr_1 = 0x00   # aa
-        attr_n = 0x00   # AA
-        # sprites
-        primary_oam = self.oam
-        secondary_oam = array.array('B', (0 for _ in range(8*4))) # is this real? 8 sprites x 4 bytes
-        spr_tiles_0 = array.array('B', (0 for _ in range(8))) # 8 pairs of 8-bit shift registers 
-        spr_tiles_1 = array.array('B', (0 for _ in range(8))) # 
-        spr_attrs = array.array('B', (0 for _ in range(8))) # 8 latches - These contain the attribute bytes for up to 8 sprites
-        spr_x_pos = array.array('B', (0 for _ in range(8))) # 8 counters - These contain the X positions for up to 8 sprites.
-
-        def render_pixel():
-            screen[pixel_idx] = ((tile_0>>self.fine_x_scroll)|(tile_1>>self.fine_x_scroll<<1)) & 0x03  # is this actually 8 - fine_x_scroll ?
-            tile_0 >>= 1
-            tile_1 >>= 1
-            pixel_idx += 1
-
-        def render_scanline():
-            # 1 cycle
-            t += 1 # idle cycle
-            # 256 cycles
-            pixel_end = pixel_idx + 256
-            while pixel_idx < pixel_end:
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                render_pixel()
-                attr_0 = attr_n # TODO: fill 0 correctly
-                attr_1 = attr_n # TODO: fill 1 correctly
-                attr_n = 0x00   # TODO: lookup next attr, increment t by 2
-                next_tile_0 = 0x00 # TODO: lookup next tile in map, increment t by 2
-                next_tile_1 = 0x00 # TODO: lookup next tile in map, increment t by 2
-                tile_0 |= next_tile_0 << 8
-                tile_1 |= next_tile_1 << 8
-
-                #if spr_x_pos[0]:
-                #    spr_x_pos[0] -= 1
-                #else:
-                #    pass # active
-                
-            # 64 cycles
-            # fetch tile data for the sprites on the next scanline
-            # 16 cycles
-            # fetch first two tiles for the next scanline
-            # 16 cycles
-            # fetch first two tiles for the next scanline
-            # 2 cycles
-            # fetch bytes here are the same nametable byte that will be fetched at the beginning of the next scanline
-
-        # Visible scanlines 0 - 239
-        line_num = 0
-        while line_num < 240:
-            render_scanline()
-
-        # Post-render scanlines 240 - 260
-        # The PPU makes no memory accesses during these scanlines, so PPU memory can be freely accessed by the program
-        
-        # Scanline 240:
-        # Idle
-
-        # Scanline 241:
-        # The VBlank flag of the PPU is set at tick 1 (the second tick) of scanline 241, where the VBlank NMI also occurs.
-
-        # Scanlines 242 - 260:
-        # TODO: do something?
-
-        # Pre-render scanline (261)
-        # TODO: do it! remember to skip last cycle on odd frames (check self.frame_num)
-
-        self.frame_num += 1
 
 def create_ppu_funcs(
     screen,
@@ -599,8 +516,7 @@ def create_ppu_funcs(
     oam_addr=0x00,
     ppu_data=0x00, # buffer for last ppudata read
     fine_x_scroll=0x0,
-    t=0,
-    pal_filepath=None
+    t=0
 ):
     """
     The PPU is represented as a tuple of functions:
@@ -617,7 +533,6 @@ def create_ppu_funcs(
     store        = None
     oam          = array.array('B', (0 for _ in range(0x100)))
     pals         = array.array('B', (0 for _ in range(0x20)))
-    rgbs         = _load_pal_from_file(pal_filepath or DEFAULT_PAL_FILEPATH)
     frame_num    = 0
     frame_t      = t
     pixel_idx    = 0
@@ -641,10 +556,10 @@ def create_ppu_funcs(
 
     def render_pixel():
         nonlocal pixel_idx
-        screen[pixel_idx] = pals[attr|((((tile_0<<(fine_x_scroll-1))|(tile_1<<fine_x_scroll))&0xC000)>>16)]
+        screen[pixel_idx] = pals[attr|((((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000))>>14)]
         pixel_idx += 1
-        tile_0    <<= 1  # this leaves garbage in upper bits,
-        tile_1    <<= 1  # but should be fine
+        tile_0 <<= 1  # this leaves garbage in upper bits,
+        tile_1 <<= 1  # but should be fine
 
     def idle():
         pass
@@ -2418,8 +2333,9 @@ class Cart(object):
         )
 
 class NES(object):
-    def __init__(self, screen, cart, cpu_regs=None, t=0, print_cpu_log=False, pal_filepath=None):
+    def __init__(self, screen, cart, cpu_regs=None, t=0, print_cpu_log=False, pal=None):
         self.cart = cart
+        self.pal = pal or NTSC_PALETTE
         self.cpu_regs = cpu_regs
         self.initial_t = t
         self.ram = array.array('B', (0 for _ in range(0x800)))
@@ -2431,18 +2347,20 @@ class NES(object):
         self.ppu_write_oam,\
         self.ppu_pals,\
         self.ppu_set_mapper_funcs,\
-        self.ppu_inspect_regs = create_ppu_funcs(screen, pal_filepath=pal_filepath)
+        self.ppu_inspect_regs = \
+            create_ppu_funcs(screen)
         self.cpu_tick,\
         self.cpu_trigger_nmi,\
         self.cpu_trigger_reset,\
         self.cpu_trigger_irq,\
         self.cpu_transfer_page_to_oam,\
         self.cpu_set_mapper_funcs,\
-        self.cpu_inspect_regs = create_cpu_funcs(
-            self.ppu_write_oam,
-            regs=cpu_regs,
-            t=t,
-            stop_on_brk=False)
+        self.cpu_inspect_regs = \
+            create_cpu_funcs(
+                self.ppu_write_oam,
+                regs=cpu_regs,
+                t=t,
+                stop_on_brk=False)
         def apu_read_reg(addr):
             return 0
         def apu_write_reg(addr, value):
@@ -2492,7 +2410,7 @@ if __name__ == "__main__":
     parser.add_argument('rom')
     parser.add_argument('--print-cart-config', action='store_true')
     parser.add_argument('--print-cpu-log', action='store_true')
-    parser.add_argument('--pal')
+    parser.add_argument('--pal-filepath', '--pal')
     args = parser.parse_args()
 
     cart = Cart.from_file(args.rom)
@@ -2500,6 +2418,9 @@ if __name__ == "__main__":
     if args.print_cart_config:
         cart.print_config()
         exit(0)
+
+    if args.pal_filepath:
+        pal = load_pal_from_file(args.pal_filepath)
 
     # Currently overriding registers + time for nestest.nes -- not sure why it doesn't align with documented initial values?
     screen = array.array('B', (0 for _ in range(256*240)))
@@ -2509,6 +2430,6 @@ if __name__ == "__main__":
         cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
         t=7,
         print_cpu_log=args.print_cpu_log,
-        pal_filepath=args.pal
+        pal=pal
     )
     nes.play()
