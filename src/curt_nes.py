@@ -665,12 +665,10 @@ def create_ppu_funcs(
         nonlocal ppu_ctrl, tmp_addr
         if t < 30000:
             return  # TODO: figure out reg_io_value / reg_io_write_state
-        gen_nmi_immediately = ppu_status & reg_io_value & ~ppu_ctrl & 0x80
+        if ppu_status & reg_io_value & ~ppu_ctrl & 0x80:
+            trigger_nmi()
         ppu_ctrl = reg_io_value
-        # TODO: figure out if this really happens here or on copy to ppu_addr?
         tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00
-        if gen_nmi_immediately:
-            raise ValueError("TODO: generate NMI!")  # TODO: immediately generate an NMI! still set ppuctrl value?
     def write_ppu_mask():
         nonlocal ppu_mask
         ppu_mask = reg_io_value
