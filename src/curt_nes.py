@@ -689,6 +689,7 @@ def create_ppu_funcs(
         nonlocal oam_byte # TODO: make this happen through read_oam_data() / reg_io_value
         oam_byte = oam[oam_addr]
     def store_scanline_oam():
+        # NOTE: this is a good candidate for optimization later on
         nonlocal ppu_status, oam_addr, oam_byte, scanline_oam_addr, disable_writes, oam_bytes_to_copy
 
         if disable_writes: # read instead
@@ -750,19 +751,20 @@ def create_ppu_funcs(
     sp_tick_funcs_for_visible_scanline = (
         # Cycle    0      : Idle
         [idle] +
-        # Cycles   1 -  64: Clear 8 scanline sprites (4 bytes each), alternating fetch/store
+        # Cycles   1 -  64: Clear 8 scanline sprites (4 bytes each), alternating read/write
         [fetch_ff_from_oam, store_ff_in_scanline_oam] * (8*4) +
-        # Cycles  65 - 256: Copy active sprites to scanline sprite list (192 cycles that alternate read/write)
+        # Cycles  65 - 256: Copy active sprites to scanline sprite list, alternating read/write
         [fetch_oam, store_scanline_oam] * (192/2) +
         # Cycles 257 - 320: Store sprite data in registers for rendering, for all 8 sprites
-        # NOTE: wiki says last 4 cycles are x reads of current sprite not y of next sprite -- I just have a hard time believing it
+        # NOTE: wiki says last 4 cycles are x reads of current sprite and this is doing y of next sprite;
+        # wiki is probably right, I just have a hard time believing it, and probably doesn't matter anyway?
         [load_sp_y, load_sp_tile_num, load_sp_attr, load_sp_x, fetch_sp_y, fetch_sp_y, fetch_sp_y, fetch_sp_y] * 8 +
         # Cycles 321 - 340: Fetch zero sprite y repeatedly, while first two background tiles are loaded
-        # NOTE: this isn't explicitly zero sprite, but addr should wrap around so it is always 0
+        # NOTE: this isn't explicitly fetching zero sprite, but addr should wrap around so it is always 0
         [fetch_sp_y] * 20
     )
     
-    # For scanlines that aren't visible, do nothing
+    # For scanlines that aren't visible, no sprite work is done
     sp_tick_funcs_for_vblank_scanline = [idle] * 341
 
     sp_tick_funcs = (
