@@ -7,7 +7,6 @@
 # TODO:
 # * implement rendering
 #   * finish laying out bg scanline rendering
-#   * generate nmi on vblank
 #   * add sprites
 #   * double check flags and controls
 #   * review docs for glitches, exceptions, etc.
@@ -539,6 +538,8 @@ def create_ppu_funcs(
     frame_t      = t
     pixel_idx    = 0
     pattern_idx  = 0
+    scanline_num = 0 # TODO: set this!!!
+    scanline_t   = 0 # TODO: set this!!!
 
     # rendering registers/latches/memory
     # background
@@ -555,10 +556,15 @@ def create_ppu_funcs(
     spr_tiles_1  = array.array('B', (0 for _ in range(8))) # 
     spr_attrs    = array.array('B', (0 for _ in range(8))) # 8 latches - These contain the attribute bytes for up to 8 sprites
     spr_x_pos    = array.array('B', (0 for _ in range(8))) # 8 counters - These contain the X positions for up to 8 sprites.
+    spr_tile_idx = 0x00 # made up temporary storage
+    spr_fine_y   = 0x0  # 
 
     def render_pixel():
         nonlocal pixel_idx
-        screen[pixel_idx] = pals[attr|((((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000))>>14)]
+        bg_idx = pals[attr|((((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000))>>14)]
+        sp_idx = 0 # TODO: get sprite pixel
+        # TODO: multiplex final pixel value
+        screen[pixel_idx] = bg_idx # TODO: lookup final RGB using master palette
         pixel_idx += 1
         tile_0 <<= 1  # this leaves garbage in upper bits,
         tile_1 <<= 1  # but should be fine
@@ -570,7 +576,7 @@ def create_ppu_funcs(
     def fetch_nt():
         nonlocal pattern_idx
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____
-        pt_idx = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
+        pattern_idx = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
     def fetch_at():
         nonlocal attr_n
         # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
@@ -623,14 +629,154 @@ def create_ppu_funcs(
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
-    visible_scanline_funcs = [idle, fetch_nt] * 340
-    idle_scanline_funcs = [idle] * 340
-    vblank_scanline_funcs = [idle] * 340
-    pre_render_scanline_funcs = [idle] * 340
+    def fetch_garbage_nt():
+        nonlocal pattern_idx
+        #  => ____ RRRR CCCC ____
+        pattern_idx = fetch(0x2000|(t&0x0FFF)) # NOTE: this is made up and doesn't actually need to be done
+    def fetch_sp_0():
+        # __0H RRRR CCCC 0TTT
+        spr_tiles_0[scanline_oam_addr] = fetch(spr_pattern_idx|0)
+    def fetch_sp_1():
+        # __0H RRRR CCCC 1TTT
+        spr_tiles_1[scanline_oam_addr] = fetch(spr_pattern_idx|8)
+
+    fetch_next_tile_funcs          = [
+        fetch_nt,         idle,
+        fetch_at,         idle,
+        fetch_bg_0,       idle,
+        fetch_bg_1,       inc_x
+    ]
+    fetch_next_sprites_funcs       = [
+        fetch_garbage_nt, idle,
+        fetch_garbage_nt, idle, 
+        fetch_sp_0,       idle,
+        fetch_sp_1,       idle,
+    ]
+    visible_scanline_funcs         = [idle, fetch_nt] * 340
+    vblank_scanline_funcs          = [idle, set_vblank_flag] + [idle] * (340-2)
+    vblank_start_scanline_funcs    = (
+        [idle, clear_flags, fetch_nt] +
+        fetch_next_tile_funcs[2:] +
+        fetch_next_tile_funcs * 255 +
+        fetch_next_sprites_funcs
+    )
+    vblank_end_even_scanline_funcs = [idle] * 340
+    vblank_end_odd_scanline_funcs  = vblank_end_even_scanline_funcs[:-1]
     
-    tick_funcs = [visible_scanline_funcs] * 240 + [idle_scanline_funcs] * (262-240)
-    tick_funcs[241] = vblank_scanline_funcs
-    tick_funcs[261] = pre_render_scanline_funcs
+    tick_funcs = (
+        [visible_scanline_funcs] * (240) +
+        [vblank_scanline_funcs]  * (262-240)
+    ) * 2
+    tick_funcs[241]     = vblank_start_scanline_funcs
+    tick_funcs[261]     = vblank_end_even_scanline_funcs
+    tick_funcs[262+241] = vblank_start_scanline_funcs
+    tick_funcs[262+261] = vblank_end_odd_scanline_funcs
+    # TODO: pre-render scanline!
+
+    oam_bytes_to_copy = 0
+    oam_byte = 0
+    scanline_oam_addr = 0
+    disable_writes = False
+    def fetch_ff_from_oam():
+        nonlocal oam_byte
+        oam_byte = 0xFF # TODO: make this happen through read_oam_data() / reg_io_value?
+    def store_ff_in_scanline_oam():
+        nonlocal scanline_oam_addr
+        scanline_oam[scanline_oam_addr] = oam_byte
+        scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
+        # TODO: find out if oam_addr gets incremented during this "clear oam" phase
+    def fetch_oam():
+        nonlocal oam_byte # TODO: make this happen through read_oam_data() / reg_io_value
+        oam_byte = oam[oam_addr]
+    def store_scanline_oam():
+        nonlocal ppu_status, oam_addr, oam_byte, scanline_oam_addr, disable_writes, oam_bytes_to_copy
+
+        if disable_writes: # read instead
+            scanline_oam[scanline_oam_addr&0x1F]
+        else:
+            scanline_oam[scanline_oam_addr] = oam_byte
+
+        if oam_bytes_to_copy:
+            scanline_oam_addr += 1
+            oam_addr += 1
+            oam_bytes_to_copy -= 1
+        elif oam_byte <= scanline_num < (oam_byte+8):  # TODO: use 16 if configured that way (ppu_ctrl&0x20), also make sure this is right  
+            if scanline_oam_addr & 0x20:
+                # overflow found, set status flag!
+                ppu_status |= 0x20
+            else:
+                scanline_oam_addr += 1
+            oam_addr += 1
+            oam_bytes_to_copy = 3
+        else:
+            if scanline_oam_addr & ~ppu_status & 0x20:
+                # overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
+                oam_addr += 1
+            oam_addr += 4
+
+        if scanline_oam_addr == 0x20:
+            disable_writes = True
+
+        if oam_addr == 0x100:
+            oam_addr = 0x00
+            disable_writes = True
+
+    def load_sp_y():
+        nonlocal scanline_oam_addr, spr_pattern_idx
+        # TODO: the subtraction below isn't right, just placeholder! check which tile 
+        spr_pattern_idx = scanline_oam[scanline_oam_addr] - scanline_y # fine y located in first bits
+        scanline_oam_addr += 1
+    def load_sp_tile_num():
+        nonlocal scanline_oam_addr, spr_pattern_idx
+
+        # TODO: handle 8x16 sprites (use zero bit instead of ppu_ctrl&0x08) 
+        is_8_16 = ppu_ctrl & 0x20
+        ((ppu_ctrl&0x08)<<9)|spr_tile_idx
+
+        spr_pattern_idx |= scanline_oam[scanline_oam_addr] << 4
+        scanline_oam_addr += 1
+    def load_sp_attr():
+        nonlocal scanline_oam_addr
+        spr_attrs[scanline_oam_addr&0xFC] = scanline_oam[scanline_oam_addr]
+        scanline_oam_addr += 1
+    def load_sp_x():
+        nonlocal scanline_oam_addr
+        spr_x_pos[scanline_oam_addr&0xFC] = scanline_oam[scanline_oam_addr]
+        scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
+    def fetch_sp_y():
+        scanline_oam[scanline_oam_addr]
+    
+    # Evaluate sprites on visible scanlines
+    sp_tick_funcs_for_visible_scanline = (
+        # Cycle    0      : Idle
+        [idle] +
+        # Cycles   1 -  64: Clear 8 scanline sprites (4 bytes each), alternating fetch/store
+        [fetch_ff_from_oam, store_ff_in_scanline_oam] * (8*4) +
+        # Cycles  65 - 256: Copy active sprites to scanline sprite list (192 cycles that alternate read/write)
+        [fetch_oam, store_scanline_oam] * (192/2) +
+        # Cycles 257 - 320: Store sprite data in registers for rendering, for all 8 sprites
+        # NOTE: wiki says last 4 cycles are x reads of current sprite not y of next sprite -- I just have a hard time believing it
+        [load_sp_y, load_sp_tile_num, load_sp_attr, load_sp_x, fetch_sp_y, fetch_sp_y, fetch_sp_y, fetch_sp_y] * 8 +
+        # Cycles 321 - 340: Fetch zero sprite y repeatedly, while first two background tiles are loaded
+        # NOTE: this isn't explicitly zero sprite, but addr should wrap around so it is always 0
+        [fetch_sp_y] * 20
+    )
+    
+    # For scanlines that aren't visible, do nothing
+    sp_tick_funcs_for_vblank_scanline = [idle] * 341
+
+    sp_tick_funcs = (
+        [sp_tick_funcs_for_visible_scanline] * 240 +
+        [sp_tick_funcs_for_vblank_scanline] * (262-240)
+    )
+
+    # REMOVE ME: once this is validated!
+    assert len(sp_tick_funcs_for_visible_scanline) == 341
+    assert len(sp_tick_funcs_for_vblank_scanline) == 341
+    assert len(sp_tick_funcs) == 262
+
+    def sp_tick():
+        pass
 
     def tick():
         nonlocal t
@@ -646,9 +792,9 @@ def create_ppu_funcs(
         reg_io_value ^= (reg_io_value^ppu_status) & 0xE0
         ppu_status &= 0x7F  # clear vblank flag
     def read_oam_data():
-        nonlocal reg_io_value, oam_addr
-        reg_io_value ^= (reg_io_value^oam[oam_addr])
-        oam_addr = (oam_addr+1) & 0xFF  # TODO: reads during v/forced blanking do not increment oamaddr
+        nonlocal reg_io_value
+        reg_io_value = oam[oam_addr] # TODO: return 0xFF if in cycles 1 - 64 of scanline
+        # NOTE: it seems that oam_addr doesn't get incremented
     def read_ppu_data():
         nonlocal reg_io_value, ppu_data, ppu_addr
         if ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
@@ -677,10 +823,10 @@ def create_ppu_funcs(
         oam_addr = reg_io_value
     def write_oam_data():
         nonlocal oam_addr
-        # TODO: ignore during rendering
+        # TODO: ignore write during rendering (+pre-rendering) but increment addr by 4
         # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
         oam[oam_addr] = reg_io_value
-        oam_addr = (oam_addr + 1) & 0xFF
+        oam_addr = (oam_addr+1) & 0xFF
     def write_ppu_scroll_0():
         nonlocal fine_x_scroll, tmp_addr
         # ........ ...XXXXX (course X)
@@ -749,9 +895,9 @@ def create_ppu_funcs(
         reg_io_write_state ^= 8
 
     def write_oam(value):
-        nonlocal oam_addr
-        oam[oam_addr] = value
-        oam_addr = (oam_addr+1) & 0xFF
+        nonlocal reg_io_value
+        reg_io_value = value # NOTE: I think this is how the value gets to write_oam_data?
+        write_oam_data()
 
     def connect(ppu_read, ppu_write, cpu_trigger_nmi):
         nonlocal fetch, store, trigger_nmi
