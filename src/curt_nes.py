@@ -559,16 +559,6 @@ def create_ppu_funcs(
     spr_tile_idx = 0x00 # made up temporary storage
     spr_fine_y   = 0x0  # 
 
-    def render_pixel():
-        nonlocal pixel_idx
-        bg_idx = pals[attr|((((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000))>>14)]
-        sp_idx = 0 # TODO: get sprite pixel
-        # TODO: multiplex final pixel value
-        screen[pixel_idx] = bg_idx # TODO: lookup final RGB using master palette
-        pixel_idx += 1
-        tile_0 <<= 1  # this leaves garbage in upper bits,
-        tile_1 <<= 1  # but should be fine
-
     def idle():
         pass
     def fetch_bg_0_addr_only():
@@ -640,54 +630,75 @@ def create_ppu_funcs(
         # __0H RRRR CCCC 1TTT
         spr_tiles_1[scanline_oam_addr] = fetch(spr_pattern_idx|8)
 
-    fetch_next_tile_funcs          = [
-        fetch_nt,         idle,
+    fetch_next_tile_funcs = [
+        idle,             fetch_nt, # this one's different to allow easy overriding on pre-render line
         fetch_at,         idle,
         fetch_bg_0,       idle,
         fetch_bg_1,       inc_x
     ]
-    fetch_next_sprites_funcs       = [
-        fetch_garbage_nt, idle,
+    
+    fetch_next_sprites_funcs = [
+        idle,             fetch_garbage_nt,
         fetch_garbage_nt, idle, 
         fetch_sp_0,       idle,
         fetch_sp_1,       idle,
     ]
-    visible_scanline_funcs         = [idle, fetch_nt] * 340
-    vblank_scanline_funcs          = [idle, set_vblank_flag] + [idle] * (340-2)
-    vblank_start_scanline_funcs    = (
-        [idle, clear_flags, fetch_nt] +
-        fetch_next_tile_funcs[2:] +
-        fetch_next_tile_funcs * 255 +
-        fetch_next_sprites_funcs
+
+    visible_scanline_funcs = (
+        # Cycle 0: First cycle is always an idle
+        [idle] +
+        # Cycles 1 - 256: Fetch data for 32 tiles (the last 2 don't matter)
+        fetch_next_tile_funcs * 32 +
+        # Cycles 257 - 320: Fetch data for 8 sprites on the next scanline
+        fetch_next_sprites_funcs * 8 +
+        # Cycles 321 - 336: Fetch first two tiles for the next scanline
+        fetch_next_tile_funcs * 2 +
+        # Cycles 337 - 340: Fetch nametable byte twice for unknown reason
+        [idle, fetch_nt] * 2
     )
-    vblank_end_even_scanline_funcs = [idle] * 340
-    vblank_end_odd_scanline_funcs  = vblank_end_even_scanline_funcs[:-1]
+    visible_scanline_funcs[257] = reset_x
+    # some docs say the pre-render scanline is 1 cycle less on odd frames instead
+    visible_scanline_funcs_odd_frame = list(visible_scanline_funcs_odd_frame[1:])
+
+    pre_render_scanline_funcs = list(visible_scanline_funcs)
+    pre_render_scanline_funcs[1] = clear_flags
+    pre_render_scanline_funcs[304] = reset_y # this is supposed to be 280 - 304, but doesn't seem like leading calls matter
+
+    vblank_scanline_funcs = [idle] * 341
+
+    first_vblank_scanline_funcs = list(vblank_scanline_funcs)
+    first_vblank_scanline_funcs[1] = set_vblank_flag
+
+    post_render_scanline_funcs = vblank_scanline_funcs
     
-    tick_funcs = (
-        [visible_scanline_funcs] * (240) +
-        [vblank_scanline_funcs]  * (262-240)
-    ) * 2
-    tick_funcs[241]     = vblank_start_scanline_funcs
-    tick_funcs[261]     = vblank_end_even_scanline_funcs
-    tick_funcs[262+241] = vblank_start_scanline_funcs
-    tick_funcs[262+261] = vblank_end_odd_scanline_funcs
-    # TODO: pre-render scanline!
+    bg_tick_funcs = [
+        [visible_scanline_funcs] * 240 +
+        [post_render_scanline_funcs] +
+        [first_vblank_scanline_funcs] +
+        [vblank_scanline_funcs] * (261-242) +
+        [pre_render_scanline_funcs]
+    ] * 2
+    bg_tick_funcs[1][261] = pre_render_scanline_funcs_odd_frame
 
     oam_bytes_to_copy = 0
     oam_byte = 0
     scanline_oam_addr = 0
     disable_writes = False
+
     def fetch_ff_from_oam():
         nonlocal oam_byte
         oam_byte = 0xFF # TODO: make this happen through read_oam_data() / reg_io_value?
+
     def store_ff_in_scanline_oam():
         nonlocal scanline_oam_addr
         scanline_oam[scanline_oam_addr] = oam_byte
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
         # TODO: find out if oam_addr gets incremented during this "clear oam" phase
+
     def fetch_oam():
         nonlocal oam_byte # TODO: make this happen through read_oam_data() / reg_io_value
         oam_byte = oam[oam_addr]
+
     def store_scanline_oam():
         # NOTE: this is a good candidate for optimization later on
         nonlocal ppu_status, oam_addr, oam_byte, scanline_oam_addr, disable_writes, oam_bytes_to_copy
@@ -727,6 +738,7 @@ def create_ppu_funcs(
         # TODO: the subtraction below isn't right, just placeholder! check which tile 
         spr_pattern_idx = scanline_oam[scanline_oam_addr] - scanline_y # fine y located in first bits
         scanline_oam_addr += 1
+
     def load_sp_tile_num():
         nonlocal scanline_oam_addr, spr_pattern_idx
 
@@ -736,24 +748,27 @@ def create_ppu_funcs(
 
         spr_pattern_idx |= scanline_oam[scanline_oam_addr] << 4
         scanline_oam_addr += 1
+
     def load_sp_attr():
         nonlocal scanline_oam_addr
         spr_attrs[scanline_oam_addr&0xFC] = scanline_oam[scanline_oam_addr]
         scanline_oam_addr += 1
+
     def load_sp_x():
         nonlocal scanline_oam_addr
         spr_x_pos[scanline_oam_addr&0xFC] = scanline_oam[scanline_oam_addr]
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
+
     def fetch_sp_y():
         scanline_oam[scanline_oam_addr]
     
     # Evaluate sprites on visible scanlines
     sp_tick_funcs_for_visible_scanline = (
-        # Cycle    0      : Idle
+        # Cycle 0 : Idle
         [idle] +
-        # Cycles   1 -  64: Clear 8 scanline sprites (4 bytes each), alternating read/write
+        # Cycles 1 - 64: Clear 8 scanline sprites (4 bytes each), alternating read/write
         [fetch_ff_from_oam, store_ff_in_scanline_oam] * (8*4) +
-        # Cycles  65 - 256: Copy active sprites to scanline sprite list, alternating read/write
+        # Cycles 65 - 256: Copy active sprites to scanline sprite list, alternating read/write
         [fetch_oam, store_scanline_oam] * (192/2) +
         # Cycles 257 - 320: Store sprite data in registers for rendering, for all 8 sprites
         # NOTE: wiki says last 4 cycles are x reads of current sprite and this is doing y of next sprite;
@@ -765,26 +780,57 @@ def create_ppu_funcs(
     )
     
     # For scanlines that aren't visible, no sprite work is done
-    sp_tick_funcs_for_vblank_scanline = [idle] * 341
+    idle_scanline = [idle] * 341
+    idle_last_scanline_odd_frame = idle_scanline[:-1] # skip last cycle of odd frames
 
-    sp_tick_funcs = (
-        [sp_tick_funcs_for_visible_scanline] * 240 +
-        [sp_tick_funcs_for_vblank_scanline] * (262-240)
+    sp_tick_funcs = [
+        [sp_tick_funcs_for_visible_scanline] * 240 + [idle_scanline] * (262-240)
+    ] * 2
+    sp_tick_funcs[1][261] = idle_last_scanline_odd_frame
+
+    def render_pixel():
+        bg_idx = pals[attr|((((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000))>>14)]
+        sp_idx = 0 # TODO: get sprite pixel
+        # TODO: multiplex final pixel value
+        screen[(scanline_num<<8)+scanline_t] = bg_idx # TODO: lookup final RGB using master palette
+        tile_0 <<= 1  # this leaves garbage in upper bits,
+        tile_1 <<= 1  # but should be fine
+
+    def inc_scanline():
+        nonlocal frame_num, scanline_num, scanline_t
+        scanline_num += 1
+        frame_num    += scanline_num / 262
+        scanline_num %= 262
+        scanline_t    = 0
+
+    render_scanline = ( # first 240 scanlines are rendered like this; even/odd are the same
+        [render_pixel] * 256 + # render 256 pixels
+        [idle] * (340-256) + # do nothing up until the last cycle of the scanline
+        [inc_scanline] # on the last cycle, increment scanline
     )
 
-    # REMOVE ME: once this is validated!
-    assert len(sp_tick_funcs_for_visible_scanline) == 341
-    assert len(sp_tick_funcs_for_vblank_scanline) == 341
-    assert len(sp_tick_funcs) == 262
+    do_not_render_scanline = [idle] * 340 + [inc_scanline] # 341 total cycles
+    do_not_render_last_scanline_odd_frame  = [idle] * 339 + [inc_scanline] # 340 total cycles
 
-    def sp_tick():
-        pass
+    render_pixel_funcs = [
+        # Evens
+        [render_scanline] * 240 + [do_not_render_scanline] * (262-240),
+        # Odds
+        [render_scanline] * 240 + [do_not_render_scanline] * (261-240) + [do_not_render_last_scanline_odd_frame]
+    ]
+
+    # REMOVE ME: once this is validated!
+    for frame_funcs_to_check in (sp_tick_funcs, bg_tick_funcs, render_pixel_funcs):
+        assert len(frame_funcs_to_check) == 2
+        for frame_num_to_check, scanline_funcs_to_check in enumerate(frame_funcs_to_check):
+            assert len(scanline_funcs_to_check) == 262
+            for cycle_funcs_to_check in scanline_funcs_to_check:
+                assert len(cycle_funcs_to_check) == (341 if frame_num_to_check == 0 else 340)
 
     def tick():
-        nonlocal t
-        tick_funcs[t-frame_t]()
-        render_pixel()
-        t += 1
+        sp_tick_funcs     [frame_num&1][scanline_num][scanline_t]()
+        bg_tick_funcs     [frame_num&1][scanline_num][scanline_t]()
+        render_pixel_funcs[frame_num&1][scanline_num][scanline_t]()
 
     def read_nothing():
         pass
