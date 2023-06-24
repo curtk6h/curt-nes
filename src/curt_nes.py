@@ -537,9 +537,9 @@ def create_ppu_funcs(
     frame_num    = 0
     frame_t      = t
     pixel_idx    = 0
-    pattern_idx  = 0
-    scanline_num = 0 # TODO: set this!!!
-    scanline_t   = 0 # TODO: set this!!!
+    pt_addr      = 0
+    scanline_num = 0
+    scanline_t   = 0
 
     # rendering registers/latches/memory
     # background
@@ -556,31 +556,36 @@ def create_ppu_funcs(
     spr_tiles_1  = array.array('B', (0 for _ in range(8))) # 
     spr_attrs    = array.array('B', (0 for _ in range(8))) # 8 latches - These contain the attribute bytes for up to 8 sprites
     spr_x_pos    = array.array('B', (0 for _ in range(8))) # 8 counters - These contain the X positions for up to 8 sprites.
-    spr_tile_idx = 0x00 # made up temporary storage
-    spr_fine_y   = 0x0  # 
+    spr_pt_addr  = 0x00 # made up temporary storage
 
     def idle():
         pass
+
     def fetch_bg_0_addr_only():
-        pass  # (((ppu_ctrl&0x10)<<8)|pattern_idx|0|(ppu_addr>>12))  # no reason to actually do this
+        pass  # (((ppu_ctrl&0x10)<<8)|pt_addr|0|(ppu_addr>>12))  # no reason to actually do this
+
     def fetch_nt():
-        nonlocal pattern_idx
-        # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____
-        pattern_idx = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
+        nonlocal pt_addr
+        # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____ (__0H RRRR CCCC 0TTT)
+        pt_addr = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
+
     def fetch_at():
         nonlocal attr_n
         # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
         attr_quad = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
         # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 00YX
         attr_n = ((attr_quad>>(((ppu_addr&0x0040)>>4)|(ppu_addr&0x0002)))&3) << 2
+
     def fetch_bg_0():
         nonlocal next_0
         # __0H RRRR CCCC 0TTT
-        next_0 = fetch(((ppu_ctrl&0x10)<<8)|pattern_idx|0|(ppu_addr>>12))
+        next_0 = fetch(((ppu_ctrl&0x10)<<8)|pt_addr|0|(ppu_addr>>12))
+
     def fetch_bg_1():
         nonlocal next_1
         # __0H RRRR CCCC 1TTT
-        next_1 = fetch(((ppu_ctrl&0x10)<<8)|pattern_idx|8|(ppu_addr>>12))
+        next_1 = fetch(((ppu_ctrl&0x10)<<8)|pt_addr|8|(ppu_addr>>12))
+
     def inc_x():
         nonlocal ppu_addr, tile_0, tile_1, attr
         # _yyy NNYY YYYX XXXX => _yyy NnYY YYYx xxxx (x=X+1, n=carry)
@@ -590,6 +595,7 @@ def create_ppu_funcs(
         tile_0 |= next_0
         tile_1 |= next_1
         attr = attr_n
+
     def inc_xy():
         nonlocal ppu_addr, tile_0, tile_1, attr
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
@@ -600,6 +606,7 @@ def create_ppu_funcs(
         tile_0 |= next_0
         tile_1 |= next_1
         attr = attr_n
+
     def reset_x():
         nonlocal ppu_addr, tile_0, tile_1, attr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x001F
@@ -607,28 +614,29 @@ def create_ppu_funcs(
         tile_0 |= next_0
         tile_1 |= next_1
         attr = attr_n
+
     def reset_y():
         nonlocal ppu_addr
         ppu_addr ^= (ppu_addr^tmp_addr) & 0x03E0
         # this probably loads shifters? shouldn't need to emulate it, though
+
     def set_vblank_flag():
         nonlocal ppu_status
         ppu_status |= 0x80
         if ppu_ctrl & 0x80:
             trigger_nmi()
+
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
-    def fetch_garbage_nt():
-        nonlocal pattern_idx
-        #  => ____ RRRR CCCC ____
-        pattern_idx = fetch(0x2000|(t&0x0FFF)) # NOTE: this is made up and doesn't actually need to be done
+
     def fetch_sp_0():
         # __0H RRRR CCCC 0TTT
-        spr_tiles_0[scanline_oam_addr] = fetch(spr_pattern_idx|0)
+        spr_tiles_0[scanline_oam_addr] = fetch(spr_pt_addr|0)
+
     def fetch_sp_1():
         # __0H RRRR CCCC 1TTT
-        spr_tiles_1[scanline_oam_addr] = fetch(spr_pattern_idx|8)
+        spr_tiles_1[scanline_oam_addr] = fetch(spr_pt_addr|8)
 
     fetch_next_tile_funcs = [
         idle,             fetch_nt, # this one's different to allow easy overriding on pre-render line
@@ -638,8 +646,8 @@ def create_ppu_funcs(
     ]
     
     fetch_next_sprites_funcs = [
-        idle,             fetch_garbage_nt,
-        fetch_garbage_nt, idle, 
+        idle,             fetch_nt, # the two nt fetches done here (under sprite) don't serve any purpose
+        fetch_nt,         idle,     #
         fetch_sp_0,       idle,
         fetch_sp_1,       idle,
     ]
@@ -657,7 +665,9 @@ def create_ppu_funcs(
         [idle, fetch_nt] * 2
     )
     visible_scanline_funcs[257] = reset_x
-    # some docs say the pre-render scanline is 1 cycle less on odd frames instead
+
+    # Some docs say the pre-render scanline is 1 cycle less on odd
+    # frames (vs last cycle / last scanline / last frame), so going with that!
     visible_scanline_funcs_odd_frame = list(visible_scanline_funcs_odd_frame[1:])
 
     pre_render_scanline_funcs = list(visible_scanline_funcs)
@@ -678,7 +688,7 @@ def create_ppu_funcs(
         [vblank_scanline_funcs] * (261-242) +
         [pre_render_scanline_funcs]
     ] * 2
-    bg_tick_funcs[1][261] = pre_render_scanline_funcs_odd_frame
+    bg_tick_funcs[1][0] = visible_scanline_funcs_odd_frame
 
     oam_bytes_to_copy = 0
     oam_byte = 0
@@ -700,53 +710,65 @@ def create_ppu_funcs(
         oam_byte = oam[oam_addr]
 
     def store_scanline_oam():
-        # NOTE: this is a good candidate for optimization later on
         nonlocal ppu_status, oam_addr, oam_byte, scanline_oam_addr, disable_writes, oam_bytes_to_copy
 
-        if disable_writes: # read instead
+        if disable_writes:
+            # Perform read instead of write if writing is disabled
             scanline_oam[scanline_oam_addr&0x1F]
         else:
             scanline_oam[scanline_oam_addr] = oam_byte
-
+        
         if oam_bytes_to_copy:
+            # Copy byte of sprite that's already been identified as "on this scanline"
             scanline_oam_addr += 1
             oam_addr += 1
             oam_bytes_to_copy -= 1
-        elif oam_byte <= scanline_num < (oam_byte+8):  # TODO: use 16 if configured that way (ppu_ctrl&0x20), also make sure this is right  
+        elif oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)):
+            # Sprite is on this scanline! Start copying
+            # NOTE: oam_byte in this case is the Y value, ((ppu_ctrl&0x20)>>2) is 8 if sprite is 16 pixels tall
             if scanline_oam_addr & 0x20:
-                # overflow found, set status flag!
-                ppu_status |= 0x20
+                ppu_status |= 0x20  # overflow found, set status flag!
             else:
                 scanline_oam_addr += 1
             oam_addr += 1
             oam_bytes_to_copy = 3
         else:
+            # Skip sprite
             if scanline_oam_addr & ~ppu_status & 0x20:
                 # overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
                 oam_addr += 1
             oam_addr += 4
 
         if scanline_oam_addr == 0x20:
+            # Disable writes once 8 sprites have been found
             disable_writes = True
 
         if oam_addr == 0x100:
+            # Disable writes and wrap oam_addr after evaluating last sprite
             oam_addr = 0x00
             disable_writes = True
 
     def load_sp_y():
-        nonlocal scanline_oam_addr, spr_pattern_idx
-        # TODO: the subtraction below isn't right, just placeholder! check which tile 
-        spr_pattern_idx = scanline_oam[scanline_oam_addr] - scanline_y # fine y located in first bits
+        nonlocal scanline_oam_addr, spr_pt_addr
+        # This is the same calc for 8x8 and 8x16 sprites,
+        # since second pattern immediately follows first when 8x16.
+        # For 8x8 the value range will be 0 - 7 and 8x16 it'll be 0 - 15.
+        fine_y = scanline_num - scanline_oam[scanline_oam_addr]
+        # Put upper bit of fine y (that's currently stting in "plane" bit of a pt address)
+        # into lowest "column" bit to indicate the following tile
+        spr_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)
         scanline_oam_addr += 1
 
     def load_sp_tile_num():
-        nonlocal scanline_oam_addr, spr_pattern_idx
-
-        # TODO: handle 8x16 sprites (use zero bit instead of ppu_ctrl&0x08) 
+        nonlocal scanline_oam_addr, spr_pt_addr
+        tile_num = scanline_oam[scanline_oam_addr]
         is_8_16 = ppu_ctrl & 0x20
-        ((ppu_ctrl&0x08)<<9)|spr_tile_idx
-
-        spr_pattern_idx |= scanline_oam[scanline_oam_addr] << 4
+        if is_8_16: 
+            # The first bit indicates bank for 8x16 sprites (=> __0C RRRR CCCT PTTT)
+            spr_pt_addr |= ((tile_num<<12)|(tile_num<<4)) & 0x1FE0
+        else:
+            # Use bank specified in ppu ctrl like nametables does (=> __0H RRRR CCCC PTTT)
+            spr_pt_addr |= ((ppu_ctrl&0x08)<<9) | (tile_num<<4)
         scanline_oam_addr += 1
 
     def load_sp_attr():
