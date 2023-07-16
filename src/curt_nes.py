@@ -699,14 +699,14 @@ def create_ppu_funcs(
     check_overflow = False
 
     def fetch_ff_from_oam():
-        nonlocal oam_byte
-        oam_byte = 0xFF # TODO: make this happen through read_oam_data() / reg_io_value?
+        nonlocal oam_byte # TODO: make this happen through read_oam_data() / reg_io_value
+        oam_byte = 0xFF
 
     def store_ff_in_scanline_oam():
         nonlocal scanline_oam_addr
         scanline_oam[scanline_oam_addr] = oam_byte
+        # NOTE: the next set of sprite operations counts on this wrapping perfectly back to 0x00
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
-        # TODO: find out if oam_addr gets incremented during this "clear oam" phase
 
     def fetch_oam():
         nonlocal oam_byte # TODO: make this happen through read_oam_data() / reg_io_value
