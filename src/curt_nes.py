@@ -713,7 +713,12 @@ def create_ppu_funcs(
         oam_byte = oam[oam_addr]
 
     def store_scanline_oam():
-        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, oam_bytes_to_copy
+        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, check_overflow, oam_bytes_to_copy
+
+        # This is probably pretty far from how the actual PPU operates,
+        # but it's hard to guess going only by what info there is in the wiki.
+        # An important effect of this implementation is that upon completion
+        # scanline_oam_addr leaves being assigned 0x00, so it's ready for the next operation!
 
         # Perform read instead of write if writing is disabled
         if disable_writes:
@@ -721,7 +726,7 @@ def create_ppu_funcs(
         else:
             scanline_oam[scanline_oam_addr] = oam_byte  # oam_byte set by fetch_oam() in previous cycle
 
-        # Switch on "mode"
+        # Switch on "mode" (this can probably be refactored once it's proved to do what it's suppoed to!)
         if oam_bytes_to_copy: # copy bytes
             # Copy byte (1-3) of sprite that's already been identified as "on this scanline"
             scanline_oam_addr += 1
@@ -732,7 +737,7 @@ def create_ppu_funcs(
             if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)):
                 ppu_status |= 0x20 # overflow found, set status flag!
                 check_overflow = False
-                oam_addr = (oam_addr + 4) & 0x03 # increment oam_addr and re-align
+                oam_addr = (oam_addr + 4) & 0x03 # increment oam_addr and re-align, correcting "diagonal" bug
             else:
                 oam_addr = (oam_addr + 5) # overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
         elif disable_writes:
@@ -788,8 +793,8 @@ def create_ppu_funcs(
     def fetch_sp_x():
         nonlocal scanline_oam_addr
         scanline_oam[scanline_oam_addr]
-        # Incrementing here wouldn't work if sprite tick happened before background tick,
-        # as background tick is copying byte 4 of sprite pattern data
+        # IMPORTANT: incrementing in this function wouldn't work if sprite tick happened
+        # before background tick, as background tick is copying byte 4 of sprite pattern data
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
 
     def fetch_sp_y():
