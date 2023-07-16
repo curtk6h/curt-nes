@@ -696,6 +696,7 @@ def create_ppu_funcs(
     oam_bytes_to_copy = 0
     oam_byte = 0
     disable_writes = False
+    check_overflow = False
 
     def fetch_ff_from_oam():
         nonlocal oam_byte
@@ -714,43 +715,49 @@ def create_ppu_funcs(
     def store_scanline_oam():
         nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, oam_bytes_to_copy
 
+        # Perform read instead of write if writing is disabled
         if disable_writes:
-            # Perform read instead of write if writing is disabled
-            oam_byte = scanline_oam[scanline_oam_addr&0x1F]
+            scanline_oam[scanline_oam_addr]
         else:
             scanline_oam[scanline_oam_addr] = oam_byte  # oam_byte set by fetch_oam() in previous cycle
-        
-        if oam_bytes_to_copy:
+
+        # Switch on "mode"
+        if oam_bytes_to_copy: # copy bytes
             # Copy byte (1-3) of sprite that's already been identified as "on this scanline"
             scanline_oam_addr += 1
             oam_addr += 1
             oam_bytes_to_copy -= 1
-        else:
-            # Check if copied sprite y is on scanline
+        elif disable_writes and check_overflow:
+            # All 8 scanline sprites found, check overflow
             if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)):
-                # Sprite is on this scanline! Start copying
-                # NOTE: oam_byte in this case is the Y value, ((ppu_ctrl&0x20)>>2) is 8 if sprite is 16 pixels tall
-                if scanline_oam_addr & 0x20:
-                    ppu_status |= 0x20  # overflow found, set status flag!
-                else:
-                    scanline_oam_addr += 1
+                ppu_status |= 0x20 # overflow found, set status flag!
+                check_overflow = False
+                oam_addr = (oam_addr + 4) & 0x03 # increment oam_addr and re-align
+            else:
+                oam_addr = (oam_addr + 5) # overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
+        elif disable_writes:
+            # All 64 sprites checked OR 8 found and overflow found
+            oam_addr += 4 # nothing to do / skip sprite
+        else:
+            # Normal operation, check for sprites on scanline
+            if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)): # sprite is on this scanline?
+                scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
             else:
-                # Skip sprite
-                if scanline_oam_addr & ~ppu_status & 0x20:
-                    # Overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
-                    oam_addr += 1
-                oam_addr += 4
+                oam_addr += 4 # skip sprite
 
-        if scanline_oam_addr == 0x20:
-            # Disable writes once 8 sprites have been found
+        if scanline_oam_addr > 0x1F:
+            # All 8 scanline sprites have been found
+            check_overflow = True
             disable_writes = True
+            scanline_oam_addr = 0x00
 
-        if oam_addr >= 0x100:
-            # Disable writes and wrap oam_addr after evaluating last sprite
+        if oam_addr > 0xFF:
+            # All 64 sprites have been checked
+            disable_writes = True
+            scanline_oam_addr = 0x00
             oam_addr &= 0xFF
-            disable_writes = True
 
     def load_sp_y():
         nonlocal sp_pt_addr, scanline_oam_addr
