@@ -765,18 +765,18 @@ def create_ppu_funcs(
             oam_addr &= 0xFF
 
     def load_sp_y():
-        nonlocal sp_pt_addr, scanline_oam_addr
+        nonlocal sp_pt_addr
         # This is the same calc for 8x8 and 8x16 sprites,
         # since second pattern immediately follows first when 8x16.
         # For 8x8 the value range will be 0 - 7 and 8x16 it'll be 0 - 15.
-        fine_y = scanline_num - scanline_oam[scanline_oam_addr>>2]
+        fine_y = scanline_num - scanline_oam[scanline_oam_addr+0]
         # Put upper bit of fine y (that's currently sitting in "plane" bit of a pattern address)
         # into lowest "column" bit to indicate the NEXT tile
         sp_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)  # TODO: flip y!!!
 
     def load_sp_tile_num():
         nonlocal sp_pt_addr
-        tile_num = scanline_oam[scanline_oam_addr>>2]
+        tile_num = scanline_oam[scanline_oam_addr+1]
         if ppu_ctrl&0x20:
             # For 8x16 sprites: the first bit indicates bank (=> __0C RRRR CCCT PTTT)
             sp_pt_addr |= ((tile_num<<12)|(tile_num<<4)) & 0x1FE0
@@ -785,16 +785,17 @@ def create_ppu_funcs(
             sp_pt_addr |= ((ppu_ctrl&0x08)<<9) | (tile_num<<4)
 
     def load_sp_attr():
-        sp_attrs[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr]
+        sp_attrs[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr+2]
 
     def load_sp_x():
-        sp_x_pos[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr]
+        sp_x_pos[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr+3]
 
     def fetch_sp_x():
         nonlocal scanline_oam_addr
-        scanline_oam[scanline_oam_addr]
+        scanline_oam[scanline_oam_addr|0x03]
         # IMPORTANT: incrementing in this function wouldn't work if sprite tick happened
-        # before background tick, as background tick is copying byte 4 of sprite pattern data
+        # before background tick, as background tick is copying byte 4 of sprite pattern data.
+        # It's also important that it wraps at the end of sprites
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
 
     def fetch_sp_y():
