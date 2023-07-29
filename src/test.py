@@ -715,7 +715,7 @@ class TestPPU(unittest.TestCase):
             ppu_write_oam(x)
             ppu = ppu_inspect_regs()
             self.assertEqual(ppu['oam_addr'], (i+1)&0xFF)
-            self.assertEqual(ppu['reg_io_value'], 0x00)
+            self.assertEqual(ppu['reg_io_value'], x)
             self.assertEqual(ppu['reg_io_write_state'], 0)
             self.assertEqual(ppu['fine_x_scroll'], 0x00)
             self.assertEqual(ppu['tmp_addr'], 0x0000)
@@ -771,10 +771,12 @@ class TestPPU(unittest.TestCase):
     def test_ppuctrl_trigger_nmi(self):
         ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_connect, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000, ppu_status=0x80)
         # flip bit to "generate an NMI", not already on, in vblank
-        self.assertRaises(ValueError, ppu_write_reg, 0, 0x80)
+        ppu_write_reg(0, 0x80)
+        self.assertEqual(self.cpu_trigger_nmi_calls, [None])
         # flip bit to "generate an NMI", already on, in vblank
         ppu_write_reg(0, 0x80)
         ppu = ppu_inspect_regs()
+        self.assertEqual(self.cpu_trigger_nmi_calls, [None])
         self.assertEqual(ppu['ppu_ctrl'], 0x80)
 
     def test_ppumask(self):
@@ -867,11 +869,12 @@ class TestPPU(unittest.TestCase):
         # first read
         self.assertEqual(ppu_read_reg(4), 0x55)
         ppu = ppu_inspect_regs()
-        self.assertEqual(ppu['oam_addr'], 0x01)
+        self.assertEqual(ppu['oam_addr'], 0x00)
         # second read
+        ppu_write_reg(3, 0x01)
         self.assertEqual(ppu_read_reg(4), 0xAA)
         ppu = ppu_inspect_regs()
-        self.assertEqual(ppu['oam_addr'], 0x02)
+        self.assertEqual(ppu['oam_addr'], 0x01)
         # TODO: reads during v/forced blanking do not increment oamaddr
         # TODO: the value of OAMADDR at tick 65 determines the starting address
         # for sprite evaluation for a visible scanline, which can cause the sprite
