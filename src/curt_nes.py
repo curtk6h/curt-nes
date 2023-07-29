@@ -559,6 +559,13 @@ def create_ppu_funcs(
     sp_x_pos     = array.array('B', (0 for _ in range(8))) # sprite x positions
     sp_pt_addr   = 0x00  # made up temporary storage for loading sprite pattern into regs
 
+    def _flip_bits(b):
+        # Thanks https://graphics.stanford.edu/~seander/bithacks.html
+        return ((((b * 0x0802 & 0x22110) | (b * 0x8020 & 0x88440)) * 0x10101) >> 16) & 0xFF
+    _flipped_bits_lookup = [_flip_bits(b) for b in range(0x100)]
+    def flip_bits(b):
+        return _flipped_bits_lookup[b]
+
     def idle():
         pass
 
@@ -633,13 +640,11 @@ def create_ppu_funcs(
 
     def fetch_sp_0():
         # __0H RRRR CCCC 0TTT
-        # TODO: flip x
-        sp_tiles_0[scanline_oam_addr>>2] = fetch(sp_pt_addr|0)
+        sp_tiles_0[scanline_oam_addr>>2] = flip_bits(fetch(sp_pt_addr|0)) if sp_attrs[scanline_oam_addr>>2]&0x40 else fetch(sp_pt_addr|0)
 
     def fetch_sp_1():
         # __0H RRRR CCCC 1TTT
-        # TODO: flip x
-        sp_tiles_1[scanline_oam_addr>>2] = fetch(sp_pt_addr|8)
+        sp_tiles_1[scanline_oam_addr>>2] = flip_bits(fetch(sp_pt_addr|8)) if sp_attrs[scanline_oam_addr>>2]&0x40 else fetch(sp_pt_addr|8)
 
     fetch_next_tile_funcs = [
         idle,             fetch_nt, # this one's different to allow easy overriding on pre-render line
@@ -669,10 +674,6 @@ def create_ppu_funcs(
     )
     visible_scanline_funcs[257] = reset_x
 
-    # Some docs say the pre-render scanline is 1 cycle less on odd
-    # frames (vs last cycle / last scanline / last frame), so going with that!
-    visible_scanline_funcs_odd_frame = list(visible_scanline_funcs_odd_frame[1:])
-
     pre_render_scanline_funcs = list(visible_scanline_funcs)
     pre_render_scanline_funcs[1] = clear_flags
     pre_render_scanline_funcs[304] = reset_y # this is supposed to be 280 - 304, but doesn't seem like leading calls matter
@@ -691,7 +692,6 @@ def create_ppu_funcs(
         [vblank_scanline_funcs] * (261-242) +
         [pre_render_scanline_funcs]
     ] * 2
-    bg_tick_funcs[1][0] = visible_scanline_funcs_odd_frame
 
     oam_bytes_to_copy = 0
     oam_byte = 0
@@ -770,9 +770,11 @@ def create_ppu_funcs(
         # since second pattern immediately follows first when 8x16.
         # For 8x8 the value range will be 0 - 7 and 8x16 it'll be 0 - 15.
         fine_y = scanline_num - scanline_oam[scanline_oam_addr+0]
+        if sp_attrs[scanline_oam_addr>>2]&0x80: # flip y
+            fine_y = (8<<((ppu_ctrl&0x20)>>5)) - fine_y
         # Put upper bit of fine y (that's currently sitting in "plane" bit of a pattern address)
         # into lowest "column" bit to indicate the NEXT tile
-        sp_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)  # TODO: flip y!!!
+        sp_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)
 
     def load_sp_tile_num():
         nonlocal sp_pt_addr
@@ -808,7 +810,7 @@ def create_ppu_funcs(
         # Cycles 1 - 64: Clear 8 scanline sprites (4 bytes each), alternating read/write
         [fetch_ff_from_oam, store_ff_in_scanline_oam] * (8*4) +
         # Cycles 65 - 256: Copy active sprites to scanline sprite list, alternating read/write
-        [fetch_oam, store_scanline_oam] * (192/2) +
+        [fetch_oam, store_scanline_oam] * (192//2) +
         # Cycles 257 - 320: Store sprite data in registers for rendering, for all 8 sprites
         [load_sp_y, load_sp_tile_num, load_sp_attr, load_sp_x, fetch_sp_x, fetch_sp_x, fetch_sp_x, fetch_sp_x] * 8 +
         # Cycles 321 - 340: Fetch zero sprite y repeatedly, while first two background tiles are loaded
@@ -818,12 +820,11 @@ def create_ppu_funcs(
     
     # For scanlines that aren't visible, no sprite work is done
     idle_scanline = [idle] * 341
-    idle_last_scanline_odd_frame = idle_scanline[:-1] # skip last cycle of odd frames
 
     sp_tick_funcs = [
-        [sp_tick_funcs_for_visible_scanline] * 240 + [idle_scanline] * (262-240)
+        [sp_tick_funcs_for_visible_scanline] * 240 +
+        [idle_scanline] * (262-240)
     ] * 2
-    sp_tick_funcs[1][261] = idle_last_scanline_odd_frame
 
     def next_pixel():
         # Get background pixel
@@ -864,7 +865,6 @@ def create_ppu_funcs(
         return pixel
 
     def render_pixel():
-        # TODO: lookup final RGB using master palette (or do that later during display?)
         screen[(scanline_num<<8)+scanline_t] = pals[next_pixel()]
 
     def inc_scanline():
@@ -874,34 +874,31 @@ def create_ppu_funcs(
         scanline_num %= 262
         scanline_t    = 0
 
-    render_scanline = ( # first 240 scanlines are rendered like this; even/odd are the same
+    render_scanline_funcs = ( # first 240 scanlines are rendered like this; even/odd are the same
         [render_pixel] * 256 + # render 256 pixels
         [idle] * (340-256) + # do nothing up until the last cycle of the scanline
         [inc_scanline] # on the last cycle, increment scanline
     )
 
-    do_not_render_scanline = [idle] * 340 + [inc_scanline] # 341 total cycles
-    do_not_render_last_scanline_odd_frame  = [idle] * 339 + [inc_scanline] # 340 total cycles
-
-    render_pixel_funcs = [
-        # Evens
-        [render_scanline] * 240 + [do_not_render_scanline] * (262-240),
-        # Odds
-        [render_scanline] * 240 + [do_not_render_scanline] * (261-240) + [do_not_render_last_scanline_odd_frame]
-    ]
+    do_not_render_scanline_funcs = [idle] * 340 + [inc_scanline] # 341 total cycles
+    
+    render_funcs = [
+        [render_scanline_funcs] * 240 +
+        [do_not_render_scanline_funcs] * (262-240)
+    ] * 2
 
     # REMOVE ME: once this is validated!
-    for frame_funcs_to_check in (sp_tick_funcs, bg_tick_funcs, render_pixel_funcs):
+    for frame_funcs_to_check_i, frame_funcs_to_check in enumerate((sp_tick_funcs, bg_tick_funcs, render_funcs)):
         assert len(frame_funcs_to_check) == 2
         for frame_num_to_check, scanline_funcs_to_check in enumerate(frame_funcs_to_check):
             assert len(scanline_funcs_to_check) == 262
             for cycle_funcs_to_check in scanline_funcs_to_check:
-                assert len(cycle_funcs_to_check) == (341 if frame_num_to_check == 0 else 340)
+                assert len(cycle_funcs_to_check) == (341 if frame_num_to_check == 0 else 341)  # both the same for now
 
     def tick():
-        bg_tick_funcs     [frame_num&1][scanline_num][scanline_t]()
-        sp_tick_funcs     [frame_num&1][scanline_num][scanline_t]()
-        render_pixel_funcs[frame_num&1][scanline_num][scanline_t]()
+        bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+        sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+        render_funcs [frame_num&1][scanline_num][scanline_t]()
 
     def read_nothing():
         pass
