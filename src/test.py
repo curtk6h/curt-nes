@@ -1186,9 +1186,20 @@ class TestPPU(unittest.TestCase):
         self.assertEqual(ppu['fine_x_scroll'], 0x02)
         self.assertEqual(ppu['ppu_addr'], 0x15AA)
 
-    def test_ppu_rendering(self):
+    def verify_ppu_interal_regs(self, **regs):
+        ppu_internal_regs = self.ppu_inspect_regs()
+        self.assertEqual({k: ppu_internal_regs[k] for k in regs.keys()}, regs)
+
+    def test_ppu_tick(self):
         ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_connect, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
-        # ppu_tick()
+        # Cycle 0
+        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=0)
+        # Cycle 1
+        ppu_tick()
+        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=1)
+        # Cycle 2
+        ppu_tick()
+        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=2)
             
 if __name__ == "__main__":
     unittest.main()

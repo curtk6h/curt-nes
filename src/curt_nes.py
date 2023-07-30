@@ -534,10 +534,8 @@ def create_ppu_funcs(
     trigger_nmi  = None
     oam          = array.array('B', (0 for _ in range(0x100)))
     pals         = array.array('B', (0 for _ in range(0x20)))
-    frame_num    = 0
-    frame_t      = t
-    pixel_idx    = 0
     pt_addr      = 0
+    frame_num    = 0
     scanline_num = 0
     scanline_t   = 0
     scanline_oam_addr = 0
@@ -827,8 +825,10 @@ def create_ppu_funcs(
     ] * 2
 
     def next_pixel():
+        nonlocal tile_0, tile_1
+        
         # Get background pixel
-        pixel = (((tile_0<<(fine_x_scroll-1))&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
+        pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
         if pixel != 0:
             pixel |= attr
 
@@ -865,7 +865,13 @@ def create_ppu_funcs(
         return pixel
 
     def render_pixel():
+        nonlocal scanline_t
         screen[(scanline_num<<8)+scanline_t] = pals[next_pixel()]
+        scanline_t  += 1
+
+    def inc_scanline_t():
+        nonlocal scanline_t
+        scanline_t  += 1
 
     def inc_scanline():
         nonlocal frame_num, scanline_num, scanline_t
@@ -874,13 +880,13 @@ def create_ppu_funcs(
         scanline_num %= 262
         scanline_t    = 0
 
-    render_scanline_funcs = ( # first 240 scanlines are rendered like this; even/odd are the same
-        [render_pixel] * 256 + # render 256 pixels
-        [idle] * (340-256) + # do nothing up until the last cycle of the scanline
-        [inc_scanline] # on the last cycle, increment scanline
+    render_scanline_funcs = (           # first 240 scanlines are rendered like this; even/odd are the same
+        [render_pixel]   * (256)     +  # render 256 pixels
+        [inc_scanline_t] * (340-256) +  # do nothing up until the last cycle of the scanline
+        [inc_scanline]                  # on the last cycle, increment scanline
     )
 
-    do_not_render_scanline_funcs = [idle] * 340 + [inc_scanline] # 341 total cycles
+    do_not_render_scanline_funcs = [inc_scanline_t] * 340 + [inc_scanline] # 341 total cycles
     
     render_funcs = [
         [render_scanline_funcs] * 240 +
@@ -1040,6 +1046,9 @@ def create_ppu_funcs(
             oam_addr=oam_addr,
             ppu_data=ppu_data,
             fine_x_scroll=fine_x_scroll,
+            frame_num=frame_num,
+            scanline_num=scanline_num,
+            scanline_t=scanline_t,
             t=t
         )
     )
