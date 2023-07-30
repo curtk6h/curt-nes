@@ -5,16 +5,16 @@
 #       closure appeared to be nearly twice as fast as using class attributes
 
 # TODO:
-# * implement rendering
-#   * finish laying out bg scanline rendering
-#   * add sprites
-#   * double check flags and controls
-#   * review docs for glitches, exceptions, etc.
-# * test interrupts
+# * finish rendering
+#   * test ppu functionality: (1) bg eval (2) sp eval (3) pixel rendering
+#   * handle sprite-0 hit flag
+#   * handle rendering disabled
+#   * review docs for flags, glitches, exceptions, etc.
 # * tick / figure out initialization/syncing w/ cpu
-# * remove unused constants etc
 # * add pygame and draw to screen
+# * refactor ppu reads/writes (so they all go through single calls and make sense w/ sp eval)
 # * handle controllers
+# * remove unused constants etc
 # * try out test ROMs!
 # * rename: crazyNES, coolNES, nneess, HI-NES (crown icon)
 # * default status to unused = 1 and removed redundant sets
