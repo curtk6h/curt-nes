@@ -1,5 +1,8 @@
 import unittest
 import array
+import os
+
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from curt_nes import create_default_mapper_funcs, create_cpu_funcs, create_ppu_funcs, VMStop
 
@@ -671,7 +674,7 @@ class TestPPU(unittest.TestCase):
             array.array('B', (0 for _ in range(0x4000))),
             array.array('B', (0 for _ in range(0x4000)))
         ]
-        self.chr_rom_banks = []
+        self.chr_rom_banks = [chr_rom]
         self.chr_ram = b''
         self.pals = array.array('B', (i&0xF for i in range(0x20)))
         for i, value in enumerate(prg_rom):
@@ -1191,15 +1194,69 @@ class TestPPU(unittest.TestCase):
         self.assertEqual({k: ppu_internal_regs[k] for k in regs.keys()}, regs)
 
     def test_ppu_tick(self):
-        ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_connect, ppu_inspect_regs = self._build_ppu_funcs(b'', t=30000)
+        with open('{}/test_chr_rom'.format(TEST_DIR), 'rb') as f:
+            chr_rom = f.read()
+        ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_connect, ppu_inspect_regs = self._build_ppu_funcs(b'', chr_rom=chr_rom, t=30000)
         # Cycle 0
-        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=0)
-        # Cycle 1
-        ppu_tick()
-        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=1)
-        # Cycle 2
-        ppu_tick()
-        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=2)
+        self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=0, t=30000)
+        # Cycle 1 - 256
+        # The data for each tile is fetched during this phase. Each memory access takes 2 PPU cycles to complete, and 4 must be performed per tile:
+        # Nametable byte
+        # Attribute table byte
+        # Pattern table tile low
+        # Pattern table tile high (+8 bytes from pattern table tile low)
+        for tt in range(1, 256):
+            ppu_tick()
+            self.verify_ppu_interal_regs(frame_num=0, scanline_num=0, scanline_t=tt, t=30000+tt)
+
+    def test_render_chr_rom_with_pygame(self):
+        with open('{}/test_chr_rom'.format(TEST_DIR), 'rb') as f:
+            chr_rom = f.read()
+        import pygame, time
+        pygame.display.init()
+        test_pal = [((i*(255//4)), (i*(255//4)), (i*(255//4))) for i in range(4)]
+        print(test_pal)
+        pt_rows, pt_cols = (32, 32)
+        pt_w, pt_h = pt_size = (pt_rows*8, pt_cols*8)
+        screen_res = (pt_w*2, pt_h)
+        screen = pygame.display.set_mode(size=screen_res) # , flags=0, depth=0, display=0, vsync=0)
+
+        # Test pygame is working as expected
+        with pygame.PixelArray(screen) as pixels:
+            for table_idx in range(2):
+                for y in range(pt_h):
+                    for x in range(pt_w):
+                        pixels[table_idx*pt_w+x,y] = (y&0xFF, 0x00, y&0xFF) if table_idx else (x&0xFF, 0x00, x&0xFF)
+        pygame.display.flip()
+
+        # Begin actual test
+        t = time.time()
+        render_test_timeout = 50.0
+        pygame.event.clear()
+        verified_success = False
+        while not verified_success and (time.time()-t) < render_test_timeout:
+            if pygame.event.get(eventtype=pygame.QUIT):
+                break
+            verified_success = pygame.K_y in [event.key for event in pygame.event.get(eventtype=pygame.KEYDOWN)]
+            with pygame.PixelArray(screen) as pixels:
+                for table_idx in range(1):
+                    for y in range(pt_h):
+                        for x in range(pt_w):
+                            row = y >> 3
+                            col = x >> 3
+                            fine_y = y & 7
+                            fine_x = x & 7
+                            p_addr = (table_idx<<12) | (row<<8) | (col<<4)
+                            p_shift = 7 - fine_x
+                            p_lo = chr_rom[p_addr|0|fine_y]
+                            p_hi = chr_rom[p_addr|8|fine_y]
+                            pal_idx = ((p_lo>>p_shift)&1) | (((p_hi>>p_shift)&1)<<1)
+                            pixels[table_idx*pt_w+x,y] = test_pal[pal_idx]
+            pygame.display.flip()
+
+        pygame.display.quit()
+
+        self.assertTrue(verified_success)
             
 if __name__ == "__main__":
     unittest.main()

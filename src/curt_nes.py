@@ -881,8 +881,9 @@ def create_ppu_funcs(
         scanline_t    = 0
 
     render_scanline_funcs = (           # first 240 scanlines are rendered like this; even/odd are the same
+        [inc_scanline_t]             +  # idle
         [render_pixel]   * (256)     +  # render 256 pixels
-        [inc_scanline_t] * (340-256) +  # do nothing up until the last cycle of the scanline
+        [inc_scanline_t] * (340-257) +  # do nothing up until the last cycle of the scanline
         [inc_scanline]                  # on the last cycle, increment scanline
     )
 
@@ -902,9 +903,11 @@ def create_ppu_funcs(
                 assert len(cycle_funcs_to_check) == (341 if frame_num_to_check == 0 else 341)  # both the same for now
 
     def tick():
+        nonlocal t
         bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         render_funcs [frame_num&1][scanline_num][scanline_t]()
+        t += 1
 
     def read_nothing():
         pass
@@ -2684,12 +2687,18 @@ if __name__ == "__main__":
     parser.add_argument('--print-cart-config', action='store_true')
     parser.add_argument('--print-cpu-log', action='store_true')
     parser.add_argument('--pal-filepath', '--pal')
+    parser.add_argument('--dump-chr-rom', action='store_true')
     args = parser.parse_args()
 
     cart = Cart.from_file(args.rom)
 
     if args.print_cart_config:
         cart.print_config()
+        exit(0)
+
+    if args.dump_chr_rom:
+        import sys
+        sys.stdout.buffer.write(cart.chr_rom_banks[0])
         exit(0)
 
     if args.pal_filepath:
