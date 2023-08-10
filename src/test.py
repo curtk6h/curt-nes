@@ -1215,8 +1215,7 @@ class TestPPU(unittest.TestCase):
         import pygame, time
         pygame.display.init()
         test_pal = [((i*(255//4)), (i*(255//4)), (i*(255//4))) for i in range(4)]
-        print(test_pal)
-        pt_rows, pt_cols = (32, 32)
+        pt_rows, pt_cols = (16, 16)
         pt_w, pt_h = pt_size = (pt_rows*8, pt_cols*8)
         screen_res = (pt_w*2, pt_h)
         screen = pygame.display.set_mode(size=screen_res) # , flags=0, depth=0, display=0, vsync=0)
@@ -1231,7 +1230,7 @@ class TestPPU(unittest.TestCase):
 
         # Begin actual test
         t = time.time()
-        render_test_timeout = 50.0
+        render_test_timeout = 5.0
         pygame.event.clear()
         verified_success = False
         while not verified_success and (time.time()-t) < render_test_timeout:
@@ -1239,7 +1238,7 @@ class TestPPU(unittest.TestCase):
                 break
             verified_success = pygame.K_y in [event.key for event in pygame.event.get(eventtype=pygame.KEYDOWN)]
             with pygame.PixelArray(screen) as pixels:
-                for table_idx in range(1):
+                for table_idx in range(2):
                     for y in range(pt_h):
                         for x in range(pt_w):
                             row = y >> 3
