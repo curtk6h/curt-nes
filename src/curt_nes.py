@@ -580,7 +580,7 @@ def create_ppu_funcs(
         # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
         attr_quad = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
         # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 00YX
-        attr_n = ((attr_quad>>(((ppu_addr&0x0040)>>4)|(ppu_addr&0x0002)))&3) << 2
+        attr_n = ((attr_quad>>(((ppu_addr&0x0040)>>5)|(ppu_addr&0x0002)>>1))&3) << 2
 
     def fetch_bg_0():
         nonlocal next_0
