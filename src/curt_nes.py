@@ -214,7 +214,7 @@ CONSOLE_FLAVOR_VS_SYSTEM = 1
 CONSOLE_FLAVOR_PLAYCHOICE_10 = 2
 CONSOLE_FLAVOR_OTHER = 3
 
-NTSC_PALETTE = 'RRR\x01\x1aQ\x0f\x0fe#\x06c6\x03K@\x04&?\t\x042\x13\x00\x1f \x00\x0b*\x00\x00/\x00\x00.\n\x00&-\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa0\xa0\xa0\x1eJ\x9d87\xbcX(\xb8u!\x94\x84#\\\x82.$o?\x00QR\x001c\x00\x1ak\x05\x0ei.\x10\\h\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfe\xff\xffi\x9e\xfc\x89\x87\xff\xaev\xff\xcem\xf1\xe0p\xb2\xde|p\xc8\x91>\xa6\xa7%\x81\xba(c\xc4FT\xc1}V\xb3\xc0<<<\x00\x00\x00\x00\x00\x00\xfe\xff\xff\xbe\xd6\xfd\xcc\xcc\xff\xdd\xc4\xff\xea\xc0\xf9\xf2\xc1\xdf\xf1\xc7\xc2\xe8\xd0\xaa\xd9\xda\x9d\xc9\xe2\x9e\xbc\xe6\xae\xb4\xe5\xc7\xb5\xdf\xe4\xa9\xa9\xa9\x00\x00\x00\x00\x00\x00'
+NTSC_PALETTE = bytearray(b'RRR\x01\x1aQ\x0f\x0fe#\x06c6\x03K@\x04&?\t\x042\x13\x00\x1f \x00\x0b*\x00\x00/\x00\x00.\n\x00&-\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa0\xa0\xa0\x1eJ\x9d87\xbcX(\xb8u!\x94\x84#\\\x82.$o?\x00QR\x001c\x00\x1ak\x05\x0ei.\x10\\h\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfe\xff\xffi\x9e\xfc\x89\x87\xff\xaev\xff\xcem\xf1\xe0p\xb2\xde|p\xc8\x91>\xa6\xa7%\x81\xba(c\xc4FT\xc1}V\xb3\xc0<<<\x00\x00\x00\x00\x00\x00\xfe\xff\xff\xbe\xd6\xfd\xcc\xcc\xff\xdd\xc4\xff\xea\xc0\xf9\xf2\xc1\xdf\xf1\xc7\xc2\xe8\xd0\xaa\xd9\xda\x9d\xc9\xe2\x9e\xbc\xe6\xae\xb4\xe5\xc7\xb5\xdf\xe4\xa9\xa9\xa9\x00\x00\x00\x00\x00\x00')
 
 class VMStop(Exception):
     pass
@@ -505,7 +505,7 @@ def load_pal_from_file(pal_filepath='ntscpalette.pal'):
         return list(zip(pal_bytes[0::3], pal_bytes[1::3], pal_bytes[2::3]))
 
 def create_ppu_funcs(
-    screen,
+    out_pixels,
     reg_io_value=0x00,
     reg_io_write_state=0,
     ppu_status=0x00,
@@ -516,6 +516,7 @@ def create_ppu_funcs(
     oam_addr=0x00,
     ppu_data=0x00, # buffer for last ppudata read
     fine_x_scroll=0x0,
+    scanline_num=0,
     t=0
 ):
     """
@@ -536,7 +537,6 @@ def create_ppu_funcs(
     pals         = array.array('B', (0 for _ in range(0x20)))
     pt_addr      = 0
     frame_num    = 0
-    scanline_num = 0
     scanline_t   = 0
     scanline_oam_addr = 0
 
@@ -548,6 +548,7 @@ def create_ppu_funcs(
     next_1       = 0x0000 # CC (next tile hi-bits to be loaded into BB)
     attr         = 0x0    # 2 bit attr (not bothering to implement this literally)
     attr_n       = 0x0    # next 2 bit attr
+    attr_tmp     = 0x0    # incoming attr
 
     # sprites
     scanline_oam = array.array('B', (0 for _ in range(0x20)))
@@ -572,15 +573,21 @@ def create_ppu_funcs(
 
     def fetch_nt():
         nonlocal pt_addr
+        # _yyy NN YYYYY XXXXX
+        #  ||| || ||||| +++++-- coarse X scroll
+        #  ||| || +++++-------- coarse Y scroll
+        #  ||| ++-------------- nametable select
+        #  +++----------------- fine Y scroll
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____ (__0H RRRR CCCC 0TTT)
         pt_addr = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
+        # TODO: ((ppu_ctrl&0x10)<<8) here!!
 
     def fetch_at():
-        nonlocal attr_n
+        nonlocal attr_tmp
         # _yyy NNYY YYYX XXXX => _000 NN00 00YY YXXX
         attr_quad = fetch(0x23C0|(ppu_addr&0x0C00)|(((ppu_addr&0x0380)>>4)|((ppu_addr&0x001C)>>2)))
-        # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 00YX
-        attr_n = ((attr_quad>>(((ppu_addr&0x0040)>>5)|(ppu_addr&0x0002)>>1))&3) << 2
+        # _yyy NNYY YYYX XXXX => _000 0000 0Y00 00X0 => _000 0000 0000 0YX0
+        attr_tmp = ((attr_quad>>(((ppu_addr&0x0040)>>4)|(ppu_addr&0x0002)))&3) << 2
 
     def fetch_bg_0():
         nonlocal next_0
@@ -593,38 +600,33 @@ def create_ppu_funcs(
         next_1 = fetch(((ppu_ctrl&0x10)<<8)|pt_addr|8|(ppu_addr>>12))
 
     def inc_x():
-        nonlocal ppu_addr, tile_0, tile_1, attr
+        nonlocal ppu_addr
         # _yyy NNYY YYYX XXXX => _yyy NnYY YYYx xxxx (x=X+1, n=carry)
         x = (ppu_addr&0x001F) + 1
         ppu_addr ^= (ppu_addr^((x<<5)|x)) & 0x041F
-        # load shifters with next tile
-        tile_0 |= next_0
-        tile_1 |= next_1
-        attr = attr_n
 
     def inc_xy():
-        nonlocal ppu_addr, tile_0, tile_1, attr
+        nonlocal ppu_addr
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
-        fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and corase x, at the same time
-        y = (ppu_addr&0x03E0) + (fine_y_x>>10)  # add fine y to coarse y (w/ garbage coarse x bits)
-        ppu_addr  = ((y&0x0400)<<1) | (y&0x03E0) | (((fine_y_x<<5)|fine_y_x)&0x741F)
-        # load shifters with next tile
-        tile_0 |= next_0
-        tile_1 |= next_1
-        attr = attr_n
+
+        # fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and corase x, at the same time
+        # y = (ppu_addr&0x03E0) + (fine_y_x>>10)  # add fine y to coarse y (w/ garbage coarse x bits)
+        # # does this handle coarse y inc to new nametable?
+        # ppu_addr  = ((y&0x0400)<<1) | (y&0x03E0) | (((fine_y_x<<5)|fine_y_x)&0x741F)
+    
+        x = (ppu_addr&0x001F) + 1
+        fine_y = (ppu_addr&0x7000) + 0x1000
+        y = (ppu_addr&0x03E0) + ((fine_y&0x8000)>>10)
+        n = (ppu_addr&0x0C00) + ((x&0x0020)<<5) # + ((y&0x0400)<<1) # this isn't exactly right since nt is 30 high?
+        ppu_addr  = ((fine_y|y) & 0x73E0) | ((n|x) & 0x0C1F)
 
     def reset_x():
-        nonlocal ppu_addr, tile_0, tile_1, attr
-        ppu_addr ^= (ppu_addr^tmp_addr) & 0x001F
-        # load shifters with next tile
-        tile_0 |= next_0
-        tile_1 |= next_1
-        attr = attr_n
+        nonlocal ppu_addr
+        ppu_addr ^= (ppu_addr^tmp_addr) & 0x041F # TODO: confirm that it's right to reset N too?
 
     def reset_y():
         nonlocal ppu_addr
-        ppu_addr ^= (ppu_addr^tmp_addr) & 0x03E0
-        # this probably loads shifters? shouldn't need to emulate it, though
+        ppu_addr ^= (ppu_addr^tmp_addr) & 0x7BE0
 
     def set_vblank_flag():
         nonlocal ppu_status
@@ -670,6 +672,7 @@ def create_ppu_funcs(
         # Cycles 337 - 340: Fetch nametable byte twice for unknown reason
         [idle, fetch_nt] * 2
     )
+    visible_scanline_funcs[256] = inc_xy
     visible_scanline_funcs[257] = reset_x
 
     pre_render_scanline_funcs = list(visible_scanline_funcs)
@@ -825,73 +828,81 @@ def create_ppu_funcs(
     ] * 2
 
     def next_pixel():
-        nonlocal tile_0, tile_1
+        nonlocal tile_0, tile_1, attr, attr_n
+
+        print(f"next_pixel({scanline_t}, {attr}, {tile_0&0xFFFF}, {tile_1&0xFFFF}, {fine_x_scroll}, {((tile_0<<fine_x_scroll>>1)&0x4000)}, {(((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14})")
         
         # Get background pixel
         pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
         if pixel != 0:
             pixel |= attr
 
-        # Get first active sprite pixel, if it's non-zero, and either:
-        # background pixel is zero or priority is not set to background
-        sp_idx = 0
-        while sp_idx < 8:
-            if sp_x_pos[sp_idx]:
-                continue # skip sprites that are ahead of current position on scanline
-            sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
-            if sp_pixel != 0 and ((pixel&0x03) == 0 or not (sp_attrs[sp_idx]&0x20)):
-                pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
-                break
-            sp_idx += 1
+        # # Get first active sprite pixel, if it's non-zero, and either:
+        # # background pixel is zero or priority is not set to background
+        # sp_idx = 0
+        # while sp_idx < 8:
+        #     if sp_x_pos[sp_idx]:
+        #         continue # skip sprites that are ahead of current position on scanline
+        #     sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
+        #     if sp_pixel != 0 and ((pixel&0x03) == 0 or not (sp_attrs[sp_idx]&0x20)):
+        #         pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
+        #         break
+        #     sp_idx += 1
 
         # Shift background registers
-        tile_0 <<= 1 # this leaves garbage in upper bits but who cares
-        tile_1 <<= 1 # 
+        if scanline_t & 7:
+            tile_0 <<= 1
+            tile_1 <<= 1
+        else:
+            tile_0 = ((tile_0<<1)&0xFFFF) | next_0
+            tile_1 = ((tile_1<<1)&0xFFFF) | next_1
+            attr   = attr_n
+            attr_n = attr_tmp
 
-        # Decrement sprite x counters, shift sprite registers
-        # NOTE: wiki says that x position is decremented before rendering,
-        # but then sprites would be offset by 1 pixel and it just seems wrong?
-        # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
-        # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
-        sp_idx = 0
-        while sp_idx < 8:
-            if sp_x_pos[sp_idx]:
-                sp_x_pos[sp_idx] -= 1
-            else:
-                sp_tiles_0[sp_idx] <<= 1
-                sp_tiles_1[sp_idx] <<= 1
-            sp_idx += 1
+        # # Decrement sprite x counters, shift sprite registers
+        # # NOTE: wiki says that x position is decremented before rendering,
+        # # but then sprites would be offset by 1 pixel and it just seems wrong?
+        # # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
+        # # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
+        # sp_idx = 0
+        # while sp_idx < 8:
+        #     if sp_x_pos[sp_idx]:
+        #         sp_x_pos[sp_idx] -= 1
+        #     else:
+        #         sp_tiles_0[sp_idx] <<= 1
+        #         sp_tiles_1[sp_idx] <<= 1
+        #     sp_idx += 1
 
         return pixel
 
     def render_pixel():
-        nonlocal scanline_t
-        screen[(scanline_num<<8)+scanline_t] = pals[next_pixel()]
-        scanline_t  += 1
-
-    def inc_scanline_t():
-        nonlocal scanline_t
-        scanline_t  += 1
-
-    def inc_scanline():
         nonlocal frame_num, scanline_num, scanline_t
-        scanline_num += 1
-        frame_num    += scanline_num / 262
+        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()]
+        scanline_t   += 1
+        scanline_num += scanline_t // 341
+        frame_num    += scanline_num // 262
         scanline_num %= 262
-        scanline_t    = 0
+        scanline_t   %= 341
 
-    render_scanline_funcs = (           # first 240 scanlines are rendered like this; even/odd are the same
-        [inc_scanline_t]             +  # idle
-        [render_pixel]   * (256)     +  # render 256 pixels
-        [inc_scanline_t] * (340-257) +  # do nothing up until the last cycle of the scanline
-        [inc_scanline]                  # on the last cycle, increment scanline
+    def skip_pixel():
+        nonlocal frame_num, scanline_num, scanline_t
+        print(f"skip_pixel({scanline_t})")
+        scanline_t   += 1
+        scanline_num += scanline_t // 341
+        frame_num    += scanline_num // 262
+        scanline_num %= 262
+        scanline_t   %= 341
+
+    render_scanline_funcs = (
+        [skip_pixel]               +  # idle
+        [render_pixel] * (257-1)   +  # visible pixels
+        [render_pixel] * (337-257) +  # hblank, junk + next line tiles
+        [skip_pixel]   * (341-337)    # hblank, unknown
     )
-
-    do_not_render_scanline_funcs = [inc_scanline_t] * 340 + [inc_scanline] # 341 total cycles
     
     render_funcs = [
-        [render_scanline_funcs] * 240 +
-        [do_not_render_scanline_funcs] * (262-240)
+        [render_scanline_funcs] * (240)    +  # visible scanlines
+        [render_scanline_funcs] * (262-240)   # vblank
     ] * 2
 
     # REMOVE ME: once this is validated!
@@ -1052,7 +1063,13 @@ def create_ppu_funcs(
             frame_num=frame_num,
             scanline_num=scanline_num,
             scanline_t=scanline_t,
-            t=t
+            t=t,
+            tile_0=tile_0,
+            tile_1=tile_1,
+            next_0=next_0,
+            next_1=next_1,
+            attr=attr,
+            attr_n=attr_n,
         )
     )
 
@@ -2610,7 +2627,8 @@ class Cart(object):
         )
 
 class NES(object):
-    def __init__(self, screen, cart, cpu_regs=None, t=0, print_cpu_log=False, pal=None):
+    def __init__(self, cart, cpu_regs=None, t=0, print_cpu_log=False, pal=None):
+        self.out_pixels = array.array('B', (0 for _ in range(341*262)))
         self.cart = cart
         self.pal = pal or NTSC_PALETTE
         self.cpu_regs = cpu_regs
@@ -2625,7 +2643,7 @@ class NES(object):
         self.ppu_pals,\
         self.ppu_connect,\
         self.ppu_inspect_regs = \
-            create_ppu_funcs(screen)
+            create_ppu_funcs(self.out_pixels)
         self.cpu_tick,\
         self.cpu_trigger_nmi,\
         self.cpu_trigger_reset,\
@@ -2705,9 +2723,7 @@ if __name__ == "__main__":
         pal = load_pal_from_file(args.pal_filepath)
 
     # Currently overriding registers + time for nestest.nes -- not sure why it doesn't align with documented initial values?
-    screen = array.array('B', (0 for _ in range(256*240)))
     nes = NES(
-        screen,
         cart,
         cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
         t=7,
