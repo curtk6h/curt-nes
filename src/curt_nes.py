@@ -618,7 +618,7 @@ def create_ppu_funcs(
 
     def reset_x():
         nonlocal ppu_addr
-        ppu_addr ^= (ppu_addr^tmp_addr) & 0x041F # TODO: confirm that it's right to reset N too?
+        ppu_addr ^= (ppu_addr^tmp_addr) & 0x041F
 
     def reset_y():
         nonlocal ppu_addr
