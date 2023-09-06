@@ -568,9 +568,6 @@ def create_ppu_funcs(
     def idle():
         pass
 
-    def fetch_bg_0_addr_only():
-        pass  # (((ppu_ctrl&0x10)<<8)|pt_addr|0|(ppu_addr>>12))  # no reason to actually do this
-
     def fetch_nt():
         nonlocal pt_addr
         # _yyy NN YYYYY XXXXX
@@ -579,8 +576,7 @@ def create_ppu_funcs(
         #  ||| ++-------------- nametable select
         #  +++----------------- fine Y scroll
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____ (__0H RRRR CCCC 0TTT)
-        pt_addr = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
-        # TODO: ((ppu_ctrl&0x10)<<8) here!!
+        pt_addr = fetch(0x2000|((ppu_ctrl&0x03)<<10)|(ppu_addr&0x0FFF)) << 4
 
     def fetch_at():
         nonlocal attr_tmp
