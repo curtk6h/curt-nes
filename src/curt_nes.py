@@ -604,7 +604,7 @@ def create_ppu_funcs(
     def inc_xy():
         nonlocal ppu_addr
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
-        fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and coarse x, at the same time
+        fine_y_x = (ppu_addr&0x701F) + 0x1001  # add 1 to fine y and coarse x, at the same time
         y = (ppu_addr&0x03E0) + ((fine_y_x&0x8000)>>10)
         n = (ppu_addr&0x0C00) ^ ((fine_y_x&0x0020)<<5) # wrap nt on x
         if y == 0x3C0: # y == 30
@@ -669,7 +669,8 @@ def create_ppu_funcs(
 
     pre_render_scanline_funcs = list(visible_scanline_funcs)
     pre_render_scanline_funcs[1] = clear_flags
-    pre_render_scanline_funcs[304] = reset_y # this is supposed to be 280 - 304, but doesn't seem like leading calls matter
+    for i in range(280, 305):
+        pre_render_scanline_funcs[i] = reset_y
 
     vblank_scanline_funcs = [idle] * 341
 
@@ -821,8 +822,6 @@ def create_ppu_funcs(
 
     def next_pixel():
         nonlocal tile_0, tile_1, attr, attr_n
-
-        print(f"next_pixel({scanline_t}, {attr}, {tile_0&0xFFFF}, {tile_1&0xFFFF}, {fine_x_scroll}, {((tile_0<<fine_x_scroll>>1)&0x4000)}, {(((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14})")
         
         # Get background pixel
         pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
@@ -878,7 +877,6 @@ def create_ppu_funcs(
 
     def skip_pixel():
         nonlocal frame_num, scanline_num, scanline_t
-        print(f"skip_pixel({scanline_t})")
         scanline_t   += 1
         scanline_num += scanline_t // 341
         frame_num    += scanline_num // 262

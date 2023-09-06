@@ -1240,7 +1240,6 @@ class TestPPU(unittest.TestCase):
             fine_y = i % 8
             nx = (i // 32) % 2
             ny = ((i // 8) // 30) % 2
-            print(f"checking {i} ({x}, {y}, {fine_y}, ({nx} | ({ny} << 1)))")
             self.assertEqual(ppu_addr, make_ppu_addr(x, y, fine_y, (nx | (ny << 1))))
             ppu_addr = inc_xy(ppu_addr)
 
@@ -1337,8 +1336,6 @@ class TestPPU(unittest.TestCase):
         # Verify cycle 340
         self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=0, t=30341, tile_0=6168, tile_1=0, next_0=24, next_1=0)
 
-        print("Starting first render scanline...")
-
         # Cycle 1 - 256
         # The data for each tile is fetched during this phase. Each memory access takes 2 PPU cycles to complete, and 4 must be performed per tile:
         # Nametable byte
@@ -1351,22 +1348,13 @@ class TestPPU(unittest.TestCase):
             self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=tt, t=30341+tt)
             ppu_tick()
 
-        print("Second scanline coming your way!")
-
         # Scanline 1
         for tt in range(341):
             self.verify_ppu_interal_regs(frame_num=1, scanline_num=1, scanline_t=tt, t=30682+tt)
             ppu_tick()
 
-        print("All remaining scanlines...")
         for tt in range(341*260):
            ppu_tick()
-
-        # print("AFTER")
-        # scanline_to_check_off = 1 * 341
-        # print(self.out_pixels[scanline_to_check_off+1:scanline_to_check_off+257])
-        # [                          0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 17, 17, 0, 0, 0, 0, 0, 0, 17, 17, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0]
-        # [0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 1, 1, 1, 17, 17, 1, 1, 1, 1, 1, 1, 17, 17, 1, 1, 1, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0]
 
         import pygame, time
         pygame.display.init()
