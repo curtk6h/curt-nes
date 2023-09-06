@@ -608,17 +608,13 @@ def create_ppu_funcs(
     def inc_xy():
         nonlocal ppu_addr
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
-
-        # fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and corase x, at the same time
-        # y = (ppu_addr&0x03E0) + (fine_y_x>>10)  # add fine y to coarse y (w/ garbage coarse x bits)
-        # # does this handle coarse y inc to new nametable?
-        # ppu_addr  = ((y&0x0400)<<1) | (y&0x03E0) | (((fine_y_x<<5)|fine_y_x)&0x741F)
-    
-        x = (ppu_addr&0x001F) + 1
-        fine_y = (ppu_addr&0x7000) + 0x1000
-        y = (ppu_addr&0x03E0) + ((fine_y&0x8000)>>10)
-        n = (ppu_addr&0x0C00) + ((x&0x0020)<<5) # + ((y&0x0400)<<1) # this isn't exactly right since nt is 30 high?
-        ppu_addr  = ((fine_y|y) & 0x73E0) | ((n|x) & 0x0C1F)
+        fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and coarse x, at the same time
+        y = (ppu_addr&0x03E0) + ((fine_y_x&0x8000)>>10)
+        n = (ppu_addr&0x0C00) ^ ((fine_y_x&0x0020)<<5) # wrap nt on x
+        if y == 0x3C0: # y == 30
+            y = 0x0000
+            n ^= 0x0800 # wrap nt on y
+        ppu_addr  = (fine_y_x&0x701F) | n | y
 
     def reset_x():
         nonlocal ppu_addr

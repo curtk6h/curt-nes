@@ -1204,6 +1204,46 @@ class TestPPU(unittest.TestCase):
         # print(ppu_internal_regs)
         self.assertEqual({k: ppu_internal_regs[k] for k in regs.keys()}, regs)
 
+    def test_inc_xy(self):
+        # Copy of function, ah well
+        def inc_xy(ppu_addr):
+            # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
+            fine_y_x = (ppu_addr&0x701F) + 0x1001   # add 1 to fine y and coarse x, at the same time
+            y = (ppu_addr&0x03E0) + ((fine_y_x&0x8000)>>10)
+            n = (ppu_addr&0x0C00) ^ ((fine_y_x&0x0020)<<5) # wrap nt on x
+            if y == 0x3C0: # y == 30
+                y = 0x0000
+                n ^= 0x0800 # wrap nt on y
+            return (fine_y_x&0x701F) | n | y
+        def ppu_addr_x(ppu_addr):
+            return ppu_addr & 0x001F
+        def ppu_addr_y(ppu_addr):
+            return (ppu_addr>>5) & 0x001F
+        def ppu_addr_fine_y(ppu_addr):
+            return (ppu_addr>>12) & 0x000F
+        def ppu_addr_n(ppu_addr):
+            return (ppu_addr>>10) & 0x0003
+        def set_ppu_addr_x(ppu_addr, x):
+            return ppu_addr ^ ((ppu_addr^x)&0x001F)
+        def set_ppu_addr_y(ppu_addr, y):
+            return ppu_addr ^ ((ppu_addr^(y<<5))&0x03E0)
+        def set_ppu_addr_fine_y(ppu_addr, fine_y):
+            return ppu_addr ^ ((ppu_addr^(fine_y<<12))&0xF000)
+        def set_ppu_addr_n(ppu_addr, n):
+            return ppu_addr ^ ((ppu_addr^(n<<10))&0x0C00)
+        def make_ppu_addr(x, y, fine_y, n):
+            return (x&0x1F) | ((y<<5)&0x03E0) | ((n<<10)&0x0C00) | ((fine_y<<12)&0xF000)
+        ppu_addr = 0x0000
+        for i in range(32*30):
+            x = i % 32
+            y = (i // 8) % 30
+            fine_y = i % 8
+            nx = (i // 32) % 2
+            ny = ((i // 8) // 30) % 2
+            print(f"checking {i} ({x}, {y}, {fine_y}, ({nx} | ({ny} << 1)))")
+            self.assertEqual(ppu_addr, make_ppu_addr(x, y, fine_y, (nx | (ny << 1))))
+            ppu_addr = inc_xy(ppu_addr)
+
     def test_ppu_tick(self):
         with open('{}/test_chr_rom'.format(TEST_DIR), 'rb') as f:
             chr_rom = f.read()
