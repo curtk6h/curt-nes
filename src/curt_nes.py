@@ -830,24 +830,34 @@ def create_ppu_funcs(
         nonlocal tile_0, tile_1, attr, attr_n, ppu_status, zero_sprite_on_scanline
         
         # Get background pixel
-        pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
-        if pixel != 0:
-            pixel |= attr
+        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t < 8):
+            # Rendering is OFF entirely or for the left-most column
+            pixel = 0x00
+        else:
+            # Rendering is ON
+            pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
+            if pixel != 0:
+                pixel |= attr
 
         # Get first active sprite pixel, if it's non-zero, and either:
         # background pixel is zero or priority is not set to background
-        sp_idx = 0
-        while sp_idx < 8:
-            if not sp_x_pos[sp_idx]:  # skip sprites that are ahead of current position on scanline
-                sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
-                if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
-                    if sp_idx == 0:
-                        if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
-                            ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
-                        zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
-                    pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
-                    break
-            sp_idx += 1
+        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8):
+            # Rendering is OFF entirely or for the left-most column
+            pass
+        else:
+            # Rendering is ON
+            sp_idx = 0
+            while sp_idx < 8:
+                if not sp_x_pos[sp_idx]:  # skip sprites that are ahead of current position on scanline
+                    sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
+                    if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
+                        if sp_idx == 0:
+                            if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
+                                ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                            zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
+                        pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
+                        break
+                sp_idx += 1
 
         # Shift background registers
         if scanline_t & 7:
@@ -914,8 +924,10 @@ def create_ppu_funcs(
 
     def tick():
         nonlocal t
-        bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
-        sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+        if (ppu_mask&0x08) != 0:
+            bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+            if (ppu_mask&0x10) != 0:
+                sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         render_funcs [frame_num&1][scanline_num][scanline_t]()
         t += 1
 
