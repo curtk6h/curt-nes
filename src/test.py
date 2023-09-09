@@ -1327,6 +1327,7 @@ class TestPPU(unittest.TestCase):
             self._build_ppu_funcs(b'', chr_rom=chr_rom, t=30000, ram={}, vram=vram, pals=pals, scanline_num=261)
 
         ppu_write_reg(0, 0x10)
+        #ppu_write_reg(1, 0x01) # use grayscale
         
         # Cycle 0 - 340
         for tt in range(341):

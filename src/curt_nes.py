@@ -6,9 +6,9 @@
 
 # TODO:
 # * finish rendering
-#   * test ppu functionality: (1) bg eval (2) sp eval (3) pixel rendering
-#   * handle sprite-0 hit flag
-#   * handle rendering disabled
+#   * handle rendering disabled (+test)
+#   * test sp eval + rendering
+#   * handle sprite-0 hit flag (+test)
 #   * review docs for flags, glitches, exceptions, etc.
 # * tick / figure out initialization/syncing w/ cpu
 # * add pygame and draw to screen
@@ -24,6 +24,8 @@
 # * build tiny sample rom that runs in working emulator
 #   * (1) create .cfg file (2) compile do nothing program (3) compile program that loops 
 # FUTURE TO DOS:
+# * color emphasis settings from PPUMASK
+# * show sprite/background in leftmost 8 pixels settings from PPUMASK
 # * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
 # * use "massive" lookups to set flags?
 # * or at least, reduce flags setting as much as possible (ex. ((r>>8)&X) == (r>>8)) OR p ^= (p ^ a) & MASK etc)
@@ -576,7 +578,7 @@ def create_ppu_funcs(
         #  ||| ++-------------- nametable select
         #  +++----------------- fine Y scroll
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____ (__0H RRRR CCCC 0TTT)
-        pt_addr = fetch(0x2000|((ppu_ctrl&0x03)<<10)|(ppu_addr&0x0FFF)) << 4
+        pt_addr = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
 
     def fetch_at():
         nonlocal attr_tmp
@@ -646,7 +648,7 @@ def create_ppu_funcs(
     ]
     
     fetch_next_sprites_funcs = [
-        idle,             fetch_nt, # the two nt fetches done here (under sprite) don't serve any purpose
+        idle,             fetch_nt, # the two nt fetches done here don't serve any purpose
         fetch_nt,         idle,     #
         fetch_sp_0,       idle,
         fetch_sp_1,       idle,     # timing of fetch_sp_1 aligns with incrementing scanline_oam_addr below
@@ -868,7 +870,7 @@ def create_ppu_funcs(
 
     def render_pixel():
         nonlocal frame_num, scanline_num, scanline_t
-        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()]
+        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()] & (0x30 if ppu_mask&1 else -1)
         scanline_t   += 1
         scanline_num += scanline_t // 341
         frame_num    += scanline_num // 262
@@ -923,8 +925,8 @@ def create_ppu_funcs(
         # NOTE: it seems that oam_addr doesn't get incremented
     def read_ppu_data():
         nonlocal reg_io_value, ppu_data, ppu_addr
-        if ppu_addr >= 0x3F00:  # TODO: factor out this IF ... ELSE :(
-            reg_io_value = fetch(ppu_addr)
+        if ppu_addr >= 0x3F00:
+            reg_io_value = fetch(ppu_addr) & (0x30 if ppu_mask&1 else -1)
             ppu_data = fetch(ppu_addr-0x1000) # TODO: move to mapper?
         else:
             reg_io_value = ppu_data
@@ -940,7 +942,7 @@ def create_ppu_funcs(
         if ppu_status & reg_io_value & ~ppu_ctrl & 0x80:
             trigger_nmi()
         ppu_ctrl = reg_io_value
-        tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00
+        tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00 # base nametable address
     def write_ppu_mask():
         nonlocal ppu_mask
         ppu_mask = reg_io_value
