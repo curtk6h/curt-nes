@@ -542,6 +542,7 @@ def create_ppu_funcs(
     scanline_t   = 0
     scanline_oam_addr = 0
     zero_sprite_on_scanline = 0x00
+    zero_sprite_on_next_scanline = 0x00
 
     # rendering registers/latches/memory
     # background
@@ -710,7 +711,7 @@ def create_ppu_funcs(
         oam_byte = oam[oam_addr]
 
     def store_scanline_oam():
-        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, check_overflow, oam_bytes_to_copy, zero_sprite_on_scanline
+        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, check_overflow, oam_bytes_to_copy, zero_sprite_on_next_scanline
 
         # This is probably pretty far from how the actual PPU operates,
         # but it's hard to guess going only by what info there is in the wiki.
@@ -744,7 +745,7 @@ def create_ppu_funcs(
             # Normal operation, check for sprites on scanline
             if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)): # sprite is on this scanline?
                 if scanline_oam_addr == 0x00:
-                    zero_sprite_on_scanline = 0x40 if oam_addr == 0x00 else 0x00
+                    zero_sprite_on_next_scanline = 0x40 if oam_addr == 0x00 else 0x00
                 scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
@@ -826,7 +827,7 @@ def create_ppu_funcs(
     ] * 2
 
     def next_pixel():
-        nonlocal tile_0, tile_1, attr, attr_n, ppu_status
+        nonlocal tile_0, tile_1, attr, attr_n, ppu_status, zero_sprite_on_scanline
         
         # Get background pixel
         pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
@@ -840,8 +841,10 @@ def create_ppu_funcs(
             if not sp_x_pos[sp_idx]:  # skip sprites that are ahead of current position on scanline
                 sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
                 if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
-                    if sp_idx == 0 and pixel&0x03:
-                       ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                    if sp_idx == 0:
+                        if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
+                            ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                        zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
                     pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
                     break
             sp_idx += 1
@@ -866,8 +869,8 @@ def create_ppu_funcs(
             if sp_x_pos[sp_idx]:
                 sp_x_pos[sp_idx] -= 1
             else:
-                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx] << 1) & 0xFF
-                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx] << 1) & 0xFF
+                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
+                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
             sp_idx += 1
 
         return pixel
