@@ -826,7 +826,7 @@ def create_ppu_funcs(
     ] * 2
 
     def next_pixel():
-        nonlocal tile_0, tile_1, attr, attr_n
+        nonlocal tile_0, tile_1, attr, attr_n, ppu_status
         
         # Get background pixel
         pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
