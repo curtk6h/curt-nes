@@ -541,6 +541,7 @@ def create_ppu_funcs(
     frame_num    = 0
     scanline_t   = 0
     scanline_oam_addr = 0
+    zero_sprite_on_scanline = 0x00
 
     # rendering registers/latches/memory
     # background
@@ -709,7 +710,7 @@ def create_ppu_funcs(
         oam_byte = oam[oam_addr]
 
     def store_scanline_oam():
-        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, check_overflow, oam_bytes_to_copy
+        nonlocal ppu_status, oam_addr, scanline_oam_addr, disable_writes, check_overflow, oam_bytes_to_copy, zero_sprite_on_scanline
 
         # This is probably pretty far from how the actual PPU operates,
         # but it's hard to guess going only by what info there is in the wiki.
@@ -742,6 +743,8 @@ def create_ppu_funcs(
         else:
             # Normal operation, check for sprites on scanline
             if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)): # sprite is on this scanline?
+                if scanline_oam_addr == 0x00:
+                    zero_sprite_on_scanline = 0x40 if oam_addr == 0x00 else 0x00
                 scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
@@ -830,17 +833,18 @@ def create_ppu_funcs(
         if pixel != 0:
             pixel |= attr
 
-        # # Get first active sprite pixel, if it's non-zero, and either:
-        # # background pixel is zero or priority is not set to background
-        # sp_idx = 0
-        # while sp_idx < 8:
-        #     if sp_x_pos[sp_idx]:
-        #         continue # skip sprites that are ahead of current position on scanline
-        #     sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
-        #     if sp_pixel != 0 and ((pixel&0x03) == 0 or not (sp_attrs[sp_idx]&0x20)):
-        #         pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
-        #         break
-        #     sp_idx += 1
+        # Get first active sprite pixel, if it's non-zero, and either:
+        # background pixel is zero or priority is not set to background
+        sp_idx = 0
+        while sp_idx < 8:
+            if not sp_x_pos[sp_idx]:  # skip sprites that are ahead of current position on scanline
+                sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
+                if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
+                    if sp_idx == 0 and pixel&0x03:
+                       ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                    pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
+                    break
+            sp_idx += 1
 
         # Shift background registers
         if scanline_t & 7:
@@ -852,25 +856,25 @@ def create_ppu_funcs(
             attr   = attr_n
             attr_n = attr_tmp
 
-        # # Decrement sprite x counters, shift sprite registers
-        # # NOTE: wiki says that x position is decremented before rendering,
-        # # but then sprites would be offset by 1 pixel and it just seems wrong?
-        # # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
-        # # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
-        # sp_idx = 0
-        # while sp_idx < 8:
-        #     if sp_x_pos[sp_idx]:
-        #         sp_x_pos[sp_idx] -= 1
-        #     else:
-        #         sp_tiles_0[sp_idx] <<= 1
-        #         sp_tiles_1[sp_idx] <<= 1
-        #     sp_idx += 1
+        # Decrement sprite x counters, shift sprite registers
+        # NOTE: wiki says that x position is decremented before rendering,
+        # but then sprites would be offset by 1 pixel and it just seems wrong?
+        # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
+        # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
+        sp_idx = 0
+        while sp_idx < 8:
+            if sp_x_pos[sp_idx]:
+                sp_x_pos[sp_idx] -= 1
+            else:
+                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx] << 1) & 0xFF
+                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx] << 1) & 0xFF
+            sp_idx += 1
 
         return pixel
 
     def render_pixel():
         nonlocal frame_num, scanline_num, scanline_t
-        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()] & (0x30 if ppu_mask&1 else -1)
+        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
         scanline_t   += 1
         scanline_num += scanline_t // 341
         frame_num    += scanline_num // 262
