@@ -914,20 +914,12 @@ def create_ppu_funcs(
         [render_scanline_funcs] * (262-240)   # vblank
     ] * 2
 
-    # REMOVE ME: once this is validated!
-    for frame_funcs_to_check_i, frame_funcs_to_check in enumerate((sp_tick_funcs, bg_tick_funcs, render_funcs)):
-        assert len(frame_funcs_to_check) == 2
-        for frame_num_to_check, scanline_funcs_to_check in enumerate(frame_funcs_to_check):
-            assert len(scanline_funcs_to_check) == 262
-            for cycle_funcs_to_check in scanline_funcs_to_check:
-                assert len(cycle_funcs_to_check) == (341 if frame_num_to_check == 0 else 341)  # both the same for now
-
     def tick():
         nonlocal t
         if (ppu_mask&0x08) != 0:
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
-            if (ppu_mask&0x10) != 0:
-                sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+        if (ppu_mask&0x18) != 0:
+            sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         render_funcs [frame_num&1][scanline_num][scanline_t]()
         t += 1
 
