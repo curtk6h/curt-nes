@@ -764,6 +764,14 @@ def create_ppu_funcs(
             scanline_oam_addr = 0x00
             oam_addr &= 0xFF
 
+    def reset_sprite_eval():
+        nonlocal oam_bytes_to_copy, oam_byte, disable_writes, check_overflow, oam_addr
+        oam_bytes_to_copy = 0
+        oam_byte = 0
+        disable_writes = False
+        check_overflow = False
+        oam_addr = 0x00
+
     def load_sp_y():
         nonlocal sp_pt_addr
         # This is the same calc for 8x8 and 8x16 sprites,
@@ -775,6 +783,7 @@ def create_ppu_funcs(
         # Put upper bit of fine y (that's currently sitting in "plane" bit of a pattern address)
         # into lowest "column" bit to indicate the NEXT tile
         sp_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)
+        reset_sprite_eval()
 
     def load_sp_tile_num():
         nonlocal sp_pt_addr
@@ -785,12 +794,15 @@ def create_ppu_funcs(
         else:
             # For 8x 8 sprites: use bank specified in ppu_ctrl like nametables does (=> __0H RRRR CCCC PTTT)
             sp_pt_addr |= ((ppu_ctrl&0x08)<<9) | (tile_num<<4)
-
+        reset_sprite_eval()
+        
     def load_sp_attr():
         sp_attrs[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr+2]
+        reset_sprite_eval()
 
     def load_sp_x():
         sp_x_pos[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr+3]
+        reset_sprite_eval()
 
     def fetch_sp_x():
         nonlocal scanline_oam_addr
@@ -799,6 +811,7 @@ def create_ppu_funcs(
         # before background tick, as background tick is copying byte 4 of sprite pattern data.
         # It's also important that it wraps at the end of sprites
         scanline_oam_addr = (scanline_oam_addr+1) & 0x1F
+        reset_sprite_eval()
 
     def fetch_sp_y():
         scanline_oam[scanline_oam_addr]
@@ -839,17 +852,27 @@ def create_ppu_funcs(
             if pixel != 0:
                 pixel |= attr
 
+            # Shift background registers
+            if scanline_t & 7:
+                tile_0 <<= 1
+                tile_1 <<= 1
+            else:
+                tile_0 = ((tile_0<<1)&0xFFFF) | next_0
+                tile_1 = ((tile_1<<1)&0xFFFF) | next_1
+                attr   = attr_n
+                attr_n = attr_tmp
+
         # Get first active sprite pixel, if it's non-zero, and either:
         # background pixel is zero or priority is not set to background
-        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8):
+        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_t >= 256:
             # Rendering is OFF entirely or for the left-most column
             pass
         else:
             # Rendering is ON
             sp_idx = 0
             while sp_idx < 8:
-                if not sp_x_pos[sp_idx]:  # skip sprites that are ahead of current position on scanline
-                    sp_pixel = ((sp_tiles_0[sp_idx]&0x40)|(sp_tiles_1[sp_idx]&0x80)) >> 6
+                if sp_x_pos[sp_idx] == 0:  # skip sprites that are ahead of current position on scanline
+                    sp_pixel = ((sp_tiles_0[sp_idx]&0x80)>>7) | ((sp_tiles_1[sp_idx]&0x80)>>6)
                     if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
                         if sp_idx == 0:
                             if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
@@ -859,29 +882,19 @@ def create_ppu_funcs(
                         break
                 sp_idx += 1
 
-        # Shift background registers
-        if scanline_t & 7:
-            tile_0 <<= 1
-            tile_1 <<= 1
-        else:
-            tile_0 = ((tile_0<<1)&0xFFFF) | next_0
-            tile_1 = ((tile_1<<1)&0xFFFF) | next_1
-            attr   = attr_n
-            attr_n = attr_tmp
-
-        # Decrement sprite x counters, shift sprite registers
-        # NOTE: wiki says that x position is decremented before rendering,
-        # but then sprites would be offset by 1 pixel and it just seems wrong?
-        # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
-        # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
-        sp_idx = 0
-        while sp_idx < 8:
-            if sp_x_pos[sp_idx]:
-                sp_x_pos[sp_idx] -= 1
-            else:
-                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
-                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
-            sp_idx += 1
+            # Decrement sprite x counters, shift sprite registers
+            # NOTE: wiki says that x position is decremented before rendering,
+            # but then sprites would be offset by 1 pixel and it just seems wrong?
+            # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
+            # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
+            sp_idx = 0
+            while sp_idx < 8:
+                if sp_x_pos[sp_idx] > 0:
+                    sp_x_pos[sp_idx] -= 1
+                else:
+                    sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
+                    sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
+                sp_idx += 1
 
         return pixel
 
@@ -916,9 +929,8 @@ def create_ppu_funcs(
 
     def tick():
         nonlocal t
-        if (ppu_mask&0x08) != 0:
-            bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         if (ppu_mask&0x18) != 0:
+            bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
             sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         render_funcs [frame_num&1][scanline_num][scanline_t]()
         t += 1

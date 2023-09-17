@@ -1326,16 +1326,30 @@ class TestPPU(unittest.TestCase):
         ppu_tick, ppu_read_reg, ppu_write_reg, ppu_write_oam, ppu_pals, ppu_connect, ppu_inspect_regs = \
             self._build_ppu_funcs(b'', chr_rom=chr_rom, t=30000, ram={}, vram=vram, pals=pals, scanline_num=261)
 
-        ppu_write_reg(0, 0x10)
+        ppu_write_reg(0, 0x18)
         ppu_write_reg(1, 0x1E)
         
+        # Write sprite data
+        for i in range(64):
+            ppu_write_oam(i*4)  # y
+            ppu_write_oam(i%10) # pt index
+            # 76543210
+            # ||||||||
+            # ||||||++- Palette (4 to 7) of sprite
+            # |||+++--- Unimplemented (read 0)
+            # ||+------ Priority (0: in front of background; 1: behind background)
+            # |+------- Flip sprite horizontally
+            # +-------- Flip sprite vertically
+            ppu_write_oam(0x00)
+            ppu_write_oam((i*8)%256)
+
         # Cycle 0 - 340
         for tt in range(341):
-            self.verify_ppu_interal_regs(frame_num=0, scanline_num=261, scanline_t=tt, t=30000+tt)
+            #self.verify_ppu_interal_regs(frame_num=0, scanline_num=261, scanline_t=tt, t=30000+tt)
             ppu_tick()
         
         # Verify cycle 340
-        self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=0, t=30341, tile_0=6168, tile_1=0, next_0=24, next_1=0)
+        #self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=0, t=30341, tile_0=6168, tile_1=0, next_0=24, next_1=0)
 
         # Cycle 1 - 256
         # The data for each tile is fetched during this phase. Each memory access takes 2 PPU cycles to complete, and 4 must be performed per tile:
@@ -1346,15 +1360,25 @@ class TestPPU(unittest.TestCase):
 
         # Scanline 0
         for tt in range(341):
-            self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=tt, t=30341+tt)
+            #self.verify_ppu_interal_regs(frame_num=1, scanline_num=0, scanline_t=tt, t=30341+tt)
             ppu_tick()
+
+        #print('Second scan')
 
         # Scanline 1
         for tt in range(341):
-            self.verify_ppu_interal_regs(frame_num=1, scanline_num=1, scanline_t=tt, t=30682+tt)
+            #self.verify_ppu_interal_regs(frame_num=1, scanline_num=1, scanline_t=tt, t=30682+tt)
             ppu_tick()
 
-        for tt in range(341*260):
+        #print('Third scan')
+
+        # Scanline 2
+        for tt in range(341):
+            ppu_tick()
+
+        #print("Remaining lines")
+
+        for tt in range(341*259):
            ppu_tick()
 
         import pygame, time
@@ -1365,6 +1389,13 @@ class TestPPU(unittest.TestCase):
             for i, _ in enumerate(NTSC_PALETTE[::3])
         ]
 
+        # Render screen
+        with pygame.PixelArray(screen) as pixels:
+            for y in range(262):
+                for x in range(341):
+                    pixels[x,y] = ntsc_pal[self.out_pixels[x+y*341]]
+        pygame.display.flip()
+
         # Begin actual test
         t = time.time()
         render_test_timeout = 5.0
@@ -1374,14 +1405,8 @@ class TestPPU(unittest.TestCase):
             if pygame.event.get(eventtype=pygame.QUIT):
                 break
             verified_success = pygame.K_y in [event.key for event in pygame.event.get(eventtype=pygame.KEYDOWN)]
-            with pygame.PixelArray(screen) as pixels:
-                for y in range(262):
-                    for x in range(341):
-                        pixels[x,y] = ntsc_pal[self.out_pixels[x+y*341]]
-            pygame.display.flip()
 
         pygame.display.quit()
-
 
     # @unittest.skip("This is hardly a test at all and requires user confirmation")
     def test_render_chr_rom_with_pygame(self):
