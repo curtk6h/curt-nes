@@ -5,18 +5,14 @@
 #       closure appeared to be nearly twice as fast as using class attributes
 
 # TODO:
-# * finish rendering
-#   * handle rendering disabled (+test)
-#   * test sp eval + rendering
-#   * handle sprite-0 hit flag (+test)
-#   * review docs for flags, glitches, exceptions, etc.
 # * tick / figure out initialization/syncing w/ cpu
 # * add pygame and draw to screen
-# * refactor ppu reads/writes (so they all go through single calls and make sense w/ sp eval)
-# * handle controllers
-# * remove unused constants etc
 # * try out test ROMs!
-# * rename: crazyNES, coolNES, nneess, HI-NES (crown icon)
+# * handle controllers
+# * review docs for flags, glitches, exceptions, etc.
+# * add unit tests for sprite rendering (may have to extract code to test it, or expose individuals rendering funcs)
+# * refactor ppu reads/writes (so they all go through single calls and make sense w/ sp eval)
+# * remove unused constants etc
 # * default status to unused = 1 and removed redundant sets
 # * lots of cleanup / refactoring
 #   * break instructions into single cycles
@@ -325,37 +321,37 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
         def r_palette_ram_indexes(addr):
             return pals[(addr-(0x3F00))&0x1F]
         def r_nametable_0_0(addr):
-            return vram[(addr-(0x2000-0x0000))&0x0FFF]
+            return vram[(addr-0x2000+0x0000)&0x07FF]
         def r_nametable_0_1(addr):
-            return vram[(addr-(0x2000-0x0400))&0x0FFF]
+            return vram[(addr-0x2000+0x0400)&0x07FF]
         def r_nametable_0_2(addr):
-            return vram[(addr-(0x2000-0x0800))&0x0FFF]
+            return vram[(addr-0x2000+0x0800)&0x07FF]
         def r_nametable_0_3(addr):
-            return vram[(addr-(0x2000-0x0C00))&0x0FFF]
+            return vram[(addr-0x2000+0x0C00)&0x07FF]
         def r_nametable_1_0(addr):
-            return vram[(addr-(0x2400-0x0000))&0x0FFF]
+            return vram[(addr-0x2400+0x0000)&0x07FF]
         def r_nametable_1_1(addr):
-            return vram[(addr-(0x2400-0x0400))&0x0FFF]
+            return vram[(addr-0x2400+0x0400)&0x07FF]
         def r_nametable_1_2(addr):
-            return vram[(addr-(0x2400-0x0800))&0x0FFF]
+            return vram[(addr-0x2400+0x0800)&0x07FF]
         def r_nametable_1_3(addr):
-            return vram[(addr-(0x2400-0x0C00))&0x0FFF]
+            return vram[(addr-0x2400+0x0C00)&0x07FF]
         def r_nametable_2_0(addr):
-            return vram[(addr-(0x2800-0x0000))&0x0FFF]
+            return vram[(addr-0x2800+0x0000)&0x07FF]
         def r_nametable_2_1(addr):
-            return vram[(addr-(0x2800-0x0400))&0x0FFF]
+            return vram[(addr-0x2800+0x0400)&0x07FF]
         def r_nametable_2_2(addr):
-            return vram[(addr-(0x2800-0x0800))&0x0FFF]
+            return vram[(addr-0x2800+0x0800)&0x07FF]
         def r_nametable_2_3(addr):
-            return vram[(addr-(0x2800-0x0C00))&0x0FFF]
+            return vram[(addr-0x2800+0x0C00)&0x07FF]
         def r_nametable_3_0(addr):
-            return vram[(addr-(0x2C00-0x0000))&0x0FFF]
+            return vram[(addr-0x2C00+0x0000)&0x07FF]
         def r_nametable_3_1(addr):
-            return vram[(addr-(0x2C00-0x0400))&0x0FFF]
+            return vram[(addr-0x2C00+0x0400)&0x07FF]
         def r_nametable_3_2(addr):
-            return vram[(addr-(0x2C00-0x0800))&0x0FFF]
+            return vram[(addr-0x2C00+0x0800)&0x07FF]
         def r_nametable_3_3(addr):
-            return vram[(addr-(0x2C00-0x0C00))&0x0FFF]
+            return vram[(addr-0x2C00+0x0C00)&0x07FF]
             
         def w_pattern_tables_from_chr_rom(addr, value):
             chr_rom_bank[addr] = value
@@ -364,37 +360,38 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
         def w_palette_ram_indexes(addr, value):
             pals[(addr-(0x3F00))&0x1F] = value
         def w_nametable_0_0(addr, value):
-            vram[(addr-(0x2000-0x0000))&0x0FFF] = value
+            vram[(addr-0x2000+0x0000)&0x07FF] = value
         def w_nametable_0_1(addr, value):
-            vram[(addr-(0x2000-0x0400))&0x0FFF] = value
+            vram[(addr-0x2000+0x0400)&0x07FF] = value
         def w_nametable_0_2(addr, value):
-            vram[(addr-(0x2000-0x0800))&0x0FFF] = value
+            vram[(addr-0x2000+0x0800)&0x07FF] = value
         def w_nametable_0_3(addr, value):
-            vram[(addr-(0x2000-0x0C00))&0x0FFF] = value
+            vram[(addr-0x2000+0x0C00)&0x07FF] = value
         def w_nametable_1_0(addr, value):
-            vram[(addr-(0x2400-0x0000))&0x0FFF] = value
+            vram[(addr-0x2400+0x0000)&0x07FF] = value
         def w_nametable_1_1(addr, value):
-            vram[(addr-(0x2400-0x0400))&0x0FFF] = value
+            vram[(addr-0x2400+0x0400)&0x07FF] = value
         def w_nametable_1_2(addr, value):
-            vram[(addr-(0x2400-0x0800))&0x0FFF] = value
+            vram[(addr-0x2400+0x0800)&0x07FF] = value
         def w_nametable_1_3(addr, value):
-            vram[(addr-(0x2400-0x0C00))&0x0FFF] = value
+            vram[(addr-0x2400+0x0C00)&0x07FF] = value
         def w_nametable_2_0(addr, value):
-            vram[(addr-(0x2800-0x0000))&0x0FFF] = value
+            vram[(addr-0x2800+0x0000)&0x07FF] = value
         def w_nametable_2_1(addr, value):
-            vram[(addr-(0x2800-0x0400))&0x0FFF] = value
+            vram[(addr-0x2800+0x0400)&0x07FF] = value
         def w_nametable_2_2(addr, value):
-            vram[(addr-(0x2800-0x0800))&0x0FFF] = value
+            print(f"nt write {addr} actual addr = {(addr-(0x2800-0x0800))&0x07FF} capacity = {len(vram)}")
+            vram[(addr-0x2800+0x0800)&0x07FF] = value
         def w_nametable_2_3(addr, value):
-            vram[(addr-(0x2800-0x0C00))&0x0FFF] = value
+            vram[(addr-0x2800+0x0C00)&0x07FF] = value
         def w_nametable_3_0(addr, value):
-            vram[(addr-(0x2C00-0x0000))&0x0FFF] = value
+            vram[(addr-0x2C00+0x0000)&0x07FF] = value
         def w_nametable_3_1(addr, value):
-            vram[(addr-(0x2C00-0x0400))&0x0FFF] = value
+            vram[(addr-0x2C00+0x0400)&0x07FF] = value
         def w_nametable_3_2(addr, value):
-            vram[(addr-(0x2C00-0x0800))&0x0FFF] = value
+            vram[(addr-0x2C00+0x0800)&0x07FF] = value
         def w_nametable_3_3(addr, value):
-            vram[(addr-(0x2C00-0x0C00))&0x0FFF] = value
+            vram[(addr-0x2C00+0x0C00)&0x07FF] = value
 
         if nt_mirroring == NT_MIRRORING_VERTICAL:
             r_nametable_0 = r_nametable_0_0
@@ -461,7 +458,7 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 [r_nametable_1]          * 0x0400 +
                 [r_nametable_2]          * 0x0400 +
                 [r_nametable_3]          * 0x0300 +
-                [r_palette_ram_indexes]  * 0x100
+                [r_palette_ram_indexes]  * 0x0100
             ),
             (
                 [w_pattern_table_0]      * 0x1000 +
@@ -474,7 +471,7 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 [w_nametable_1]          * 0x0400 +
                 [w_nametable_2]          * 0x0400 +
                 [w_nametable_3]          * 0x0300 +
-                [w_palette_ram_indexes]  * 0x100
+                [w_palette_ram_indexes]  * 0x0100
             )
         )
 
@@ -627,6 +624,7 @@ def create_ppu_funcs(
     def set_vblank_flag():
         nonlocal ppu_status
         ppu_status |= 0x80
+        print("setting vblank")
         if ppu_ctrl & 0x80:
             trigger_nmi()
 
@@ -689,6 +687,14 @@ def create_ppu_funcs(
         [first_vblank_scanline_funcs] +
         [vblank_scanline_funcs] * (261-242) +
         [pre_render_scanline_funcs]
+    ] * 2
+
+    no_tick_funcs = [
+        [vblank_scanline_funcs] * 240 +
+        [post_render_scanline_funcs] +
+        [first_vblank_scanline_funcs] +
+        [vblank_scanline_funcs] * (261-242) +
+        [vblank_scanline_funcs]
     ] * 2
 
     oam_bytes_to_copy = 0
@@ -929,7 +935,9 @@ def create_ppu_funcs(
 
     def tick():
         nonlocal t
-        if (ppu_mask&0x18) != 0:
+        if (ppu_mask&0x18) == 0:
+            no_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+        else:
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
             sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
         render_funcs [frame_num&1][scanline_num][scanline_t]()
@@ -960,7 +968,7 @@ def create_ppu_funcs(
         pass
     def write_ppu_ctrl():
         nonlocal ppu_ctrl, tmp_addr
-        if t < 30000:
+        if t < 29658:
             return  # TODO: figure out reg_io_value / reg_io_write_state
         if ppu_status & reg_io_value & ~ppu_ctrl & 0x80:
             trigger_nmi()
@@ -2463,7 +2471,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         # as interrupts are the only exception to normal execution
         nonlocal pc
         nonlocal t, s
-        store(STACK_OFFSET+s, pc<<8)
+        store(STACK_OFFSET+s, pc>>8)
         s = (s-1) & 0xFF
         store(STACK_OFFSET+s, pc&0xFF)
         s = (s-1) & 0xFF
@@ -2596,10 +2604,10 @@ class Cart(object):
         trainer = ines_file.read(0x200) if has_trainer else None
 
         # Extract 16 KB PRG-ROM banks
-        prg_rom_banks = [ines_file.read(0x4000) for _ in range(num_prg_rom_banks)]
+        prg_rom_banks = [bytearray(ines_file.read(0x4000)) for _ in range(num_prg_rom_banks)]
 
         # Extract  8 KB CHR-ROM banks
-        chr_rom_banks = [ines_file.read(0x2000) for _ in range(num_chr_rom_banks)]
+        chr_rom_banks = [bytearray(ines_file.read(0x2000)) for _ in range(num_chr_rom_banks)]
 
         return Cart(
             prg_rom_banks,
@@ -2690,6 +2698,18 @@ class NES(object):
         self.ppu_connect(self.ppu_read, self.ppu_write, self.cpu_trigger_nmi)
 
     def play(self):
+        import pygame
+        pygame.display.init()
+        screen = pygame.display.set_mode(size=(341, 262)) # , flags=0, depth=0, display=0, vsync=0)
+        rgbs = [
+            (
+                self.pal[i+0],
+                self.pal[i+1],
+                self.pal[i+2]
+            )
+            for i, _ in enumerate(self.pal[::3])
+        ]
+
         t = self.initial_t
         try:
             if self.print_cpu_log:
@@ -2707,12 +2727,43 @@ class NES(object):
                     print(log_line)
                     t = self.cpu_tick()
             else:
+                frame_duration = int(113.667*262)
+                frame_start = t
                 self.cpu_trigger_reset()
-                while True:
+                pygame.event.clear()
+                while not pygame.event.get(eventtype=pygame.QUIT):
+                    last_t = t
                     t = self.cpu_tick()
+                    if t > 29658:
+                        pc, s, a, x, y, p = self.cpu_inspect_regs()
+                        op = self.cpu_read(pc)
+                        num_operands = INSTRUCTION_BYTES[op]
+                        operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                        operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                        addr_mode = INSTRUCTION_ADDR_MODES[op]
+                        addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                        log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
+                        log_line += ' ' * (48-len(log_line))
+                        log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
+                        print(log_line)
+                        while last_t < t:
+                            print("ticking ppu x4")
+                            self.ppu_tick()
+                            self.ppu_tick()
+                            self.ppu_tick()
+                            last_t += 1
+                        if (t - frame_start) >= frame_duration:
+                            with pygame.PixelArray(screen) as screen_pixels:
+                                for y in range(262):
+                                    for x in range(341):
+                                        screen_pixels[x,y] = rgbs[self.out_pixels[x+y*341]]
+                            pygame.display.flip()
+                            print(f"flip t = {t}")
+                            frame_start = t
         except VMStop:
-            return t  # clean exit
-
+            pygame.display.quit()
+        return t  # clean exit
+        
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Curt NES v0.0.0')
@@ -2736,12 +2787,14 @@ if __name__ == "__main__":
 
     if args.pal_filepath:
         pal = load_pal_from_file(args.pal_filepath)
+    else:
+        pal = None
 
     # Currently overriding registers + time for nestest.nes -- not sure why it doesn't align with documented initial values?
     nes = NES(
         cart,
-        cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
-        t=7,
+        #cpu_regs=(0xC000, 0xFD, 0x00, 0x00, 0x00, 0x24),
+        #t=7,
         print_cpu_log=args.print_cpu_log,
         pal=pal
     )
