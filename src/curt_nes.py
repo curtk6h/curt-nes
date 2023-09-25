@@ -318,8 +318,10 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
             return chr_rom_bank[addr]
         def r_pattern_tables_from_chr_ram(addr):
             return chr_ram[addr]
-        def r_palette_ram_indexes(addr):
-            return pals[(addr-(0x3F00))&0x1F]
+        def r_palette_ram(addr):
+            return pals[(addr-0x3F00)&0x1F]
+        def r_palette_ram_sp_mirror(addr):
+            return pals[(addr-0x3F10)&0x1F]
         def r_nametable_0_0(addr):
             return vram[(addr-0x2000+0x0000)&0x07FF]
         def r_nametable_0_1(addr):
@@ -357,8 +359,10 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
             chr_rom_bank[addr] = value
         def w_pattern_tables_from_chr_ram(addr, value):
             chr_ram[addr] = value
-        def w_palette_ram_indexes(addr, value):
-            pals[(addr-(0x3F00))&0x1F] = value
+        def w_palette_ram(addr, value):
+            pals[(addr-0x3F00)&0x1F] = value
+        def w_palette_ram_sp_mirror(addr, value):
+            pals[(addr-0x3F10)&0x1F] = value
         def w_nametable_0_0(addr, value):
             vram[(addr-0x2000+0x0000)&0x07FF] = value
         def w_nametable_0_1(addr, value):
@@ -380,7 +384,6 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
         def w_nametable_2_1(addr, value):
             vram[(addr-0x2800+0x0400)&0x07FF] = value
         def w_nametable_2_2(addr, value):
-            print(f"nt write {addr} actual addr = {(addr-(0x2800-0x0800))&0x07FF} capacity = {len(vram)}")
             vram[(addr-0x2800+0x0800)&0x07FF] = value
         def w_nametable_2_3(addr, value):
             vram[(addr-0x2800+0x0C00)&0x07FF] = value
@@ -458,7 +461,10 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 [r_nametable_1]          * 0x0400 +
                 [r_nametable_2]          * 0x0400 +
                 [r_nametable_3]          * 0x0300 +
-                [r_palette_ram_indexes]  * 0x0100
+                (
+                    [r_palette_ram] * 4 * 4 +
+                    [r_palette_ram_sp_mirror, r_palette_ram, r_palette_ram, r_palette_ram] * 4
+                ) * 8
             ),
             (
                 [w_pattern_table_0]      * 0x1000 +
@@ -471,7 +477,10 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 [w_nametable_1]          * 0x0400 +
                 [w_nametable_2]          * 0x0400 +
                 [w_nametable_3]          * 0x0300 +
-                [w_palette_ram_indexes]  * 0x0100
+                (
+                    [w_palette_ram] * 4 * 4 +
+                    [w_palette_ram_sp_mirror, w_palette_ram, w_palette_ram, w_palette_ram] * 4
+                ) * 8
             )
         )
 
@@ -884,7 +893,7 @@ def create_ppu_funcs(
                             if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
                                 ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
                             zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
-                        pixel = ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
+                        pixel = 0x10 | ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
                         break
                 sp_idx += 1
 
@@ -921,22 +930,34 @@ def create_ppu_funcs(
         scanline_num %= 262
         scanline_t   %= 341
 
+    def next_frame():
+        nonlocal frame_num, scanline_num, scanline_t
+        frame_num    += 1
+        scanline_num  = 0
+        scanline_t    = 0
+
     render_scanline_funcs = (
         [skip_pixel]               +  # idle
         [render_pixel] * (257-1)   +  # visible pixels
         [render_pixel] * (337-257) +  # hblank, junk + next line tiles
         [skip_pixel]   * (341-337)    # hblank, unknown
     )
+
+    last_render_scanline_odd_frame_funcs = render_scanline_funcs[:-2] + [next_frame]
     
     render_funcs = [
-        [render_scanline_funcs] * (240)    +  # visible scanlines
-        [render_scanline_funcs] * (262-240)   # vblank
-    ] * 2
+        [render_scanline_funcs] * (240)     +  # visible scanlines
+        [render_scanline_funcs] * (262-240)    # vblank
+        ,
+        [render_scanline_funcs] * (240)     +  # visible scanlines
+        [render_scanline_funcs] * (262-239) +  # vblank
+        [last_render_scanline_odd_frame_funcs]
+    ]
 
     def tick():
         nonlocal t
         if (ppu_mask&0x18) == 0:
-            no_tick_funcs[frame_num&1][scanline_num][scanline_t]()
+            no_tick_funcs[frame_num&1][scanline_num][scanline_t]() # TODO: look at this more
         else:
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
             sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
@@ -2707,7 +2728,7 @@ class NES(object):
                 self.pal[i+1],
                 self.pal[i+2]
             )
-            for i, _ in enumerate(self.pal[::3])
+            for i in range(0, 192, 3)
         ]
 
         t = self.initial_t
@@ -2735,19 +2756,19 @@ class NES(object):
                     last_t = t
                     t = self.cpu_tick()
                     if t > 29658:
-                        pc, s, a, x, y, p = self.cpu_inspect_regs()
-                        op = self.cpu_read(pc)
-                        num_operands = INSTRUCTION_BYTES[op]
-                        operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
-                        operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
-                        addr_mode = INSTRUCTION_ADDR_MODES[op]
-                        addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                        log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
-                        log_line += ' ' * (48-len(log_line))
-                        log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                        print(log_line)
+                        # pc, s, a, x, y, p = self.cpu_inspect_regs()
+                        # op = self.cpu_read(pc)
+                        # num_operands = INSTRUCTION_BYTES[op]
+                        # operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                        # operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                        # addr_mode = INSTRUCTION_ADDR_MODES[op]
+                        # addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                        # log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
+                        # log_line += ' ' * (48-len(log_line))
+                        # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
+                        # print(log_line)
                         while last_t < t:
-                            print("ticking ppu x4")
+                            # print("ticking ppu x4")
                             self.ppu_tick()
                             self.ppu_tick()
                             self.ppu_tick()

@@ -1386,7 +1386,7 @@ class TestPPU(unittest.TestCase):
         screen = pygame.display.set_mode(size=(341, 262)) # , flags=0, depth=0, display=0, vsync=0)
         ntsc_pal = [
             (NTSC_PALETTE[i+0], NTSC_PALETTE[i+1], NTSC_PALETTE[i+2])
-            for i, _ in enumerate(NTSC_PALETTE[::3])
+            for i in range(0, 192, 3)
         ]
 
         # Render screen
@@ -1557,7 +1557,7 @@ class TestPPU(unittest.TestCase):
         buffer = [0x00] * (nt_w*nt_h)
         ntsc_pal = [
             (NTSC_PALETTE[i+0], NTSC_PALETTE[i+1], NTSC_PALETTE[i+2])
-            for i, _ in enumerate(NTSC_PALETTE[::3])
+            for i in range(0, 192, 3)
         ]
         while not verified_success and (time.time()-t) < render_test_timeout:
             if pygame.event.get(eventtype=pygame.QUIT):
