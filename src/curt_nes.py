@@ -955,12 +955,13 @@ def create_ppu_funcs(
         ,
         [render_scanline_funcs] * (240)     +  # visible scanlines
         [render_scanline_funcs] * (262-239) +  # vblank
-        [last_render_scanline_odd_frame_funcs] # skip last cycle
+        [last_render_scanline_odd_frame_funcs] # skip last cycle (TODO: skip first cycle of first visible scanline instead?)
     ]
 
     def tick():
         nonlocal t
         if (ppu_mask&0x18) == 0:
+            # TODO: lots more cleanup to do here
             no_tick_funcs[frame_num&1][scanline_num][scanline_t]() # TODO: look at this more
             skip_pixel()
         else:
