@@ -632,13 +632,14 @@ def create_ppu_funcs(
 
     def set_vblank_flag():
         nonlocal ppu_status
+        print(f"calling nmi at {t}")
         ppu_status |= 0x80
-        print("setting vblank")
         if ppu_ctrl & 0x80:
             trigger_nmi()
 
     def clear_flags():
         nonlocal ppu_status
+        print(f"clearing ppu flags at {t}")
         ppu_status &= 0x1F
 
     def fetch_sp_0():
@@ -688,6 +689,9 @@ def create_ppu_funcs(
     first_vblank_scanline_funcs = list(vblank_scanline_funcs)
     first_vblank_scanline_funcs[1] = set_vblank_flag
 
+    pre_render_scanline_funcs_no_render = list(vblank_scanline_funcs)
+    pre_render_scanline_funcs_no_render[1] = clear_flags
+
     post_render_scanline_funcs = vblank_scanline_funcs
     
     bg_tick_funcs = [
@@ -703,7 +707,7 @@ def create_ppu_funcs(
         [post_render_scanline_funcs] +
         [first_vblank_scanline_funcs] +
         [vblank_scanline_funcs] * (261-242) +
-        [vblank_scanline_funcs]
+        [pre_render_scanline_funcs_no_render]
     ] * 2
 
     oam_bytes_to_copy = 0
@@ -951,17 +955,18 @@ def create_ppu_funcs(
         ,
         [render_scanline_funcs] * (240)     +  # visible scanlines
         [render_scanline_funcs] * (262-239) +  # vblank
-        [last_render_scanline_odd_frame_funcs]
+        [last_render_scanline_odd_frame_funcs] # skip last cycle
     ]
 
     def tick():
         nonlocal t
         if (ppu_mask&0x18) == 0:
             no_tick_funcs[frame_num&1][scanline_num][scanline_t]() # TODO: look at this more
+            skip_pixel()
         else:
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
             sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
-        render_funcs [frame_num&1][scanline_num][scanline_t]()
+            render_funcs [frame_num&1][scanline_num][scanline_t]()
         t += 1
 
     def read_nothing():
@@ -2731,7 +2736,7 @@ class NES(object):
             for i in range(0, 192, 3)
         ]
 
-        t = self.initial_t
+        t = ppu_t = self.initial_t
         try:
             if self.print_cpu_log:
                 while True:
@@ -2753,9 +2758,11 @@ class NES(object):
                 self.cpu_trigger_reset()
                 pygame.event.clear()
                 while not pygame.event.get(eventtype=pygame.QUIT):
-                    last_t = t
-                    t = self.cpu_tick()
-                    if t > 29658:
+                    # if t <= 29658:
+                    #     ppu_t = t = self.cpu_tick()
+                    # else:
+                    if True:
+                        t = self.cpu_tick()
                         # pc, s, a, x, y, p = self.cpu_inspect_regs()
                         # op = self.cpu_read(pc)
                         # num_operands = INSTRUCTION_BYTES[op]
@@ -2767,12 +2774,11 @@ class NES(object):
                         # log_line += ' ' * (48-len(log_line))
                         # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                         # print(log_line)
-                        while last_t < t:
-                            # print("ticking ppu x4")
+                        while ppu_t < t:
                             self.ppu_tick()
                             self.ppu_tick()
                             self.ppu_tick()
-                            last_t += 1
+                            ppu_t += 1
                         if (t - frame_start) >= frame_duration:
                             with pygame.PixelArray(screen) as screen_pixels:
                                 for y in range(262):
