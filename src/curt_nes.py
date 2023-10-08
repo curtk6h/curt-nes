@@ -1146,52 +1146,58 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
     # Resolve address per mode
 
     def resolve_immediate(pc):
-        return pc + 1
+        return pc
     def resolve_zero_page(pc):
-        return fetch(pc+1)
+        return fetch(pc)
     def resolve_zero_page_indexed_x(pc):
-        return (fetch(pc+1)+x) & 0xFF
+        return (fetch(pc)+x) & 0xFF
     def resolve_zero_page_indexed_y(pc):
-        return (fetch(pc+1)+y) & 0xFF
+        return (fetch(pc)+y) & 0xFF
     def resolve_absolute(pc):
-        return (fetch(pc+1)|(fetch(pc+2)<<8))
+        return (fetch(pc)|(fetch(pc+1)<<8))
     def resolve_absolute_indexed_x(pc):
         nonlocal t
-        addr = fetch(pc+1) + x
+        addr = fetch(pc) + x
         t += addr>>8
-        return (addr+(fetch(pc+2)<<8)) & 0xFFFF
+        return (addr+(fetch(pc+1)<<8)) & 0xFFFF
     def resolve_absolute_indexed_y(pc):
         nonlocal t
-        addr = fetch(pc+1) + y
+        addr = fetch(pc) + y
         t += addr>>8
-        return (addr+(fetch(pc+2)<<8)) & 0xFFFF
+        return (addr+(fetch(pc+1)<<8)) & 0xFFFF
     def resolve_absolute_indexed_x_no_extra_cycle(pc):
-        return ((fetch(pc+1)|(fetch(pc+2)<<8))+x) & 0xFFFF
+        return ((fetch(pc)|(fetch(pc+1)<<8))+x) & 0xFFFF
     def resolve_absolute_indexed_y_no_extra_cycle(pc):
-        return ((fetch(pc+1)|(fetch(pc+2)<<8))+y) & 0xFFFF
+        return ((fetch(pc)|(fetch(pc+1)<<8))+y) & 0xFFFF
     def resolve_indexed_indirect(pc):
-        i = fetch(pc+1) + x
+        i = fetch(pc) + x
         return fetch(i&0xFF)|(fetch((i+1)&0xFF)<<8)
     def resolve_indirect_indexed(pc):
         nonlocal t
-        i = fetch(pc+1)
+        i = fetch(pc)
         addr = fetch(i) + y
         t += addr>>8
         return (addr+(fetch((i+1)&0xFF)<<8)) & 0xFFFF
     def resolve_indirect_indexed_no_extra_cycle(pc):
-        i = fetch(pc+1)
+        i = fetch(pc)
         return ((fetch(i)|(fetch((i+1)&0xFF)<<8))+y) & 0xFFFF
     def resolve_indirect(pc):
-        addr = fetch(pc+1) | (fetch(pc+2)<<8)
+        addr = fetch(pc) | (fetch(pc+1)<<8)
         return fetch(addr) | (fetch((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
     def resolve_relative(pc):
         nonlocal t
-        rel_addr = signed8(fetch(pc+1))
-        pc += 2
+        rel_addr = signed8(fetch(pc))
+        pc += 1
         t += (((pc&0xFF)+rel_addr)>>8) & 1
         return pc + rel_addr
 
     # Instructions
+
+    def next_op():
+        nonlocal pc
+        opcode = fetch(pc)
+        pc += 1
+        return ops[opcode]
 
     # ADC (ADd with Carry)
     # Writes flags: N V Z C
@@ -1202,8 +1208,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def adc_65_zero_page():
         nonlocal pc, t, a, p
         m = fetch(resolve_zero_page(pc))
@@ -1211,8 +1217,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def adc_75_zero_page_indexed_x():
         nonlocal pc, t, a, p
         m = fetch(resolve_zero_page_indexed_x(pc))
@@ -1220,8 +1226,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def adc_6d_absolute():
         nonlocal pc, t, a, p
         m = fetch(resolve_absolute(pc))
@@ -1229,8 +1235,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def adc_7d_absolute_indexed_x():
         nonlocal pc, t, a, p
         m = fetch(resolve_absolute_indexed_x(pc))
@@ -1238,8 +1244,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def adc_79_absolute_indexed_y():
         nonlocal pc, t, a, p
         m = fetch(resolve_absolute_indexed_y(pc))
@@ -1247,8 +1253,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def adc_61_indexed_indirect():
         nonlocal pc, t, a, p
         m = fetch(resolve_indexed_indirect(pc))
@@ -1256,8 +1262,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def adc_71_indirect_indexed():
         nonlocal pc, t, a, p
         m = fetch(resolve_indirect_indexed(pc))
@@ -1265,8 +1271,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # AND (bitwise AND with accumulator)
     # Writes flags: N Z
@@ -1275,57 +1281,57 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         a &= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def and_25_zero_page():
         nonlocal pc, t, a, p
         a &= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def and_35_zero_page_indexed_x():
         nonlocal pc, t, a, p
         a &= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def and_2d_absolute():
         nonlocal pc, t, a, p
         a &= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def and_3d_absolute_indexed_x():
         nonlocal pc, t, a, p
         a &= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def and_39_absolute_indexed_y():
         nonlocal pc, t, a, p
         a &= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def and_21_indexed_indirect():
         nonlocal pc, t, a, p
         a &= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def and_31_indirect_indexed():
         nonlocal pc, t, a, p
         a &= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # ASL (Arithmetic Shift Left)
     # Writes flags: N Z C
@@ -1335,8 +1341,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
-        pc += 1
-        return
+        return next_op
     def asl_06_zero_page():
         nonlocal pc, t, p
         addr = resolve_zero_page(pc)
@@ -1345,8 +1350,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def asl_16_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -1355,8 +1360,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def asl_0e_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -1365,8 +1370,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def asl_1e_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -1375,8 +1380,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # BIT (test BITs)
     # Writes flags: N V Z
@@ -1385,15 +1390,15 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         m = fetch(resolve_zero_page(pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def bit_2c_absolute():
         nonlocal pc, t, p
         m = fetch(resolve_absolute(pc))
         p = (p&MASK_NVZ) | (m & N) | (m & V) | (0x00 if (m&a) else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # Branch Instructions
     # BPL (Branch on PLus)
@@ -1401,10 +1406,11 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t
         if p & N:
             t += 2
-            pc += 2
+            pc += 1
         else:
             t += 3
             pc = resolve_relative(pc)
+        return next_op
     # BMI (Branch on MInus)
     def bmi_30():
         nonlocal pc, t
@@ -1413,16 +1419,18 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
             pc = resolve_relative(pc)
         else:
             t += 2
-            pc += 2
+            pc += 1
+        return next_op
     # BVC (Branch on oVerflow Clear)
     def bvc_50():
         nonlocal pc, t
         if p & V:
             t += 2
-            pc += 2
+            pc += 1
         else:
             t += 3
             pc = resolve_relative(pc)
+        return next_op
     # BVS (Branch on oVerflow Set)
     def bvs_70():
         nonlocal pc, t
@@ -1431,16 +1439,18 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
             pc = resolve_relative(pc)
         else:
             t += 2
-            pc += 2
+            pc += 1
+        return next_op
     # BCC (Branch on Carry Clear)
     def bcc_90():
         nonlocal pc, t
         if p & C:
             t += 2
-            pc += 2
+            pc += 1
         else:
             t += 3
             pc = resolve_relative(pc)
+        return next_op
     # BCS (Branch on Carry Set)
     def bcs_b0():
         nonlocal pc, t
@@ -1449,16 +1459,18 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
             pc = resolve_relative(pc)
         else:
             t += 2
-            pc += 2
+            pc += 1
+        return next_op
     # BNE (Branch on Not Equal)
     def bne_d0():
         nonlocal pc, t
         if p & Z:
             t += 2
-            pc += 2
+            pc += 1
         else:
             t += 3
             pc = resolve_relative(pc)
+        return next_op
     # BEQ (Branch on EQual)
     def beq_f0():
         nonlocal pc, t
@@ -1467,15 +1479,18 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
             pc = resolve_relative(pc)
         else:
             t += 2
-            pc += 2
+            pc += 1
+        return next_op
     
     # BRK (BReaK)
     # Writes flags: B
     def brk_00_implied():
         nonlocal p
         p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
-        trigger_irq()
+        return trigger_irq()
     def brk_00_implied_stop_execution():  # for unit testing / debugging
+        nonlocal pc
+        pc -= 1 # REMOVE ME: this is to avoid updating tests after breaking ops into cycles
         raise VMStop()
     
     # CMP (CoMPare accumulator)
@@ -1485,57 +1500,57 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         r = a - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cmp_c5_zero_page():
         nonlocal pc, t, p
         r = a - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cmp_d5_zero_page_indexed_x():
         nonlocal pc, t, p
         r = a - fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cmp_cd_absolute():
         nonlocal pc, t, p
         r = a - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def cmp_dd_absolute_indexed_x():
         nonlocal pc, t, p
         r = a - fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def cmp_d9_absolute_indexed_y():
         nonlocal pc, t, p
         r = a - fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def cmp_c1_indexed_indirect():
         nonlocal pc, t, p
         r = a - fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cmp_d1_indirect_indexed():
         nonlocal pc, t, p
         r = a - fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # CPX (ComPare X register)
     # Writes flags: N Z C
@@ -1544,22 +1559,22 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         r = x - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cpx_e4_zero_page():
         nonlocal pc, t, p
         r = x - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cpx_ec_absolute():
         nonlocal pc, t, p
         r = x - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # CPY (ComPare Y register)
     # Writes flags: N Z C
@@ -1568,22 +1583,22 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         r = y - fetch(resolve_immediate(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cpy_c4_zero_page():
         nonlocal pc, t, p
         r = y - fetch(resolve_zero_page(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def cpy_cc_absolute():
         nonlocal pc, t, p
         r = y - fetch(resolve_absolute(pc))
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # DEC (DECrement memory)
     # Writes flags: N Z
@@ -1595,8 +1610,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def dec_d6_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -1605,8 +1620,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def dec_ce_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -1615,8 +1630,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def dec_de_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -1625,8 +1640,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # EOR (bitwise Exclusive OR)
     # Writes flags: N Z
@@ -1635,57 +1650,57 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         a ^= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def eor_45_zero_page():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def eor_55_zero_page_indexed_x():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def eor_4d_absolute():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def eor_5d_absolute_indexed_x():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def eor_59_absolute_indexed_y():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def eor_41_indexed_indirect():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def eor_51_indirect_indexed():
         nonlocal pc, t, a, p
         a ^= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # Flag (Processor Status) Instructions
     # CLC (CLear Carry)
@@ -1693,50 +1708,43 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t, p
         p &= MASK_C
         t += 2
-        pc += 1
-        return
+        return next_op
     # SEC (SEt Carry)
     def sec_38():
         nonlocal pc, t, p
         p |= C
         t += 2
-        pc += 1
-        return
+        return next_op
     # CLI (CLear Interrupt)
     def cli_58():
         nonlocal pc, t, p
         p &= MASK_I
         t += 2
-        pc += 1
-        return
+        return next_op
     # SEI (SEt Interrupt)
     def sei_78():
         nonlocal pc, t, p
         p |= I
         t += 2
-        pc += 1
-        return
+        return next_op
     # CLV (CLear oVerflow)
     def clv_b8():
         nonlocal pc, t, p
         p &= MASK_V
         t += 2
-        pc += 1
-        return
+        return next_op
     # CLD (CLear Decimal)
     def cld_d8():
         nonlocal pc, t, p
         p &= MASK_D
         t += 2
-        pc += 1
-        return
+        return next_op
     # SED (SEt Decimal)
     def sed_f8():
         nonlocal pc, t, p
         p |= D
         t += 2
-        pc += 1
-        return
+        return next_op
     
     # INC (INCrement memory)
     # Writes flags: N Z
@@ -1748,8 +1756,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def inc_f6_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -1758,8 +1766,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def inc_ee_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -1768,8 +1776,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def inc_fe_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -1778,8 +1786,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         store(addr, r&0xFF)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # JMP (JuMP)
     # Writes flags: none
@@ -1787,23 +1795,25 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t
         t += 3
         pc = resolve_absolute(pc)
+        return next_op
     def jmp_6c_indirect():
         nonlocal pc, t
         t += 5
         pc = resolve_indirect(pc)
-    
+        return next_op
     # JSR (Jump to SubRoutine)
     # Writes flags: none
     def jsr_20_absolute():
         nonlocal pc, t, s
         to = resolve_absolute(pc)
-        pc += 2 # 3 - 1 (offset by one before storing on stack)
+        pc += 1 # 2 - 1 (offset by one before storing on stack)
         store(STACK_OFFSET+s, pc>>8)
         s = (s-1) & 0xFF
         store(STACK_OFFSET+s, pc&0xFF)
         s = (s-1) & 0xFF
         t += 6
         pc = to
+        return next_op
     
     # LDA (LoaD Accumulator)
     # Writes flags: N Z
@@ -1812,57 +1822,57 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         a = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lda_a5_zero_page():
         nonlocal pc, t, a, p
         a = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lda_b5_zero_page_indexed_x():
         nonlocal pc, t, a, p
         a = fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lda_ad_absolute():
         nonlocal pc, t, a, p
         a = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def lda_bd_absolute_indexed_x():
         nonlocal pc, t, a, p
         a = fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def lda_b9_absolute_indexed_y():
         nonlocal pc, t, a, p
         a = fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def lda_a1_indexed_indirect():
         nonlocal pc, t, a, p
         a = fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lda_b1_indirect_indexed():
         nonlocal pc, t, a, p
         a = fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # LDX (LoaD X register)
     # Writes flags: N Z
@@ -1871,36 +1881,36 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         x = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldx_a6_zero_page():
         nonlocal pc, t, x, p
         x = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldx_b6_zero_page_indexed_y():
         nonlocal pc, t, x, p
         x = fetch(resolve_zero_page_indexed_y(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldx_ae_absolute():
         nonlocal pc, t, x, p
         x = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ldx_be_absolute_indexed_y():
         nonlocal pc, t, x, p
         x = fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # LDY (LoaD Y register)
     # Writes flags: N Z
@@ -1909,36 +1919,36 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         y = fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldy_a4_zero_page():
         nonlocal pc, t, y, p
         y = fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldy_b4_zero_page_indexed_x():
         nonlocal pc, t, y, p
         y = fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ldy_ac_absolute():
         nonlocal pc, t, y, p
         y = fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ldy_bc_absolute_indexed_x():
         nonlocal pc, t, y, p
         y = fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # LSR (Logical Shift Right)
     # Writes flags: N Z C
@@ -1948,8 +1958,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
         a = r
         t += 2
-        pc += 1
-        return
+        return next_op
     def lsr_46_zero_page():
         nonlocal pc, t, p
         addr = resolve_zero_page(pc)
@@ -1958,8 +1967,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lsr_56_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -1968,8 +1977,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def lsr_4e_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -1978,8 +1987,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def lsr_5e_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -1988,16 +1997,15 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # NOP (No OPeration)
     # Writes flags: none
     def nop_ea_implied():
         nonlocal pc, t
         t += 2
-        pc += 1
-        return
+        return next_op
     
     # ORA (bitwise OR with Accumulator)
     # Writes flags: N Z
@@ -2006,57 +2014,57 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         a |= fetch(resolve_immediate(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ora_05_zero_page():
         nonlocal pc, t, a, p
         a |= fetch(resolve_zero_page(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ora_15_zero_page_indexed_x():
         nonlocal pc, t, a, p
         a |= fetch(resolve_zero_page_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ora_0d_absolute():
         nonlocal pc, t, a, p
         a |= fetch(resolve_absolute(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ora_1d_absolute_indexed_x():
         nonlocal pc, t, a, p
         a |= fetch(resolve_absolute_indexed_x(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ora_19_absolute_indexed_y():
         nonlocal pc, t, a, p
         a |= fetch(resolve_absolute_indexed_y(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ora_01_indexed_indirect():
         nonlocal pc, t, a, p
         a |= fetch(resolve_indexed_indirect(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ora_11_indirect_indexed():
         nonlocal pc, t, a, p
         a |= fetch(resolve_indirect_indexed(pc))
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # Register Instructions
     # Writes flags: N Z
@@ -2066,64 +2074,56 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         x = a
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # TXA (Transfer X to A)
     def txa_8a():
         nonlocal pc, t, a, p
         a = x
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # DEX (DEcrement X)
     def dex_ca():
         nonlocal pc, t, x, p
         x = (x - 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # INX (INcrement X)
     def inx_e8():
         nonlocal pc, t, x, p
         x = (x + 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # TAY (Transfer A to Y)
     def tay_a8():
         nonlocal pc, t, y, p
         y = a
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # TYA (Transfer Y to A)
     def tya_98():
         nonlocal pc, t, a, p
         a = y
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # DEY (DEcrement Y)
     def dey_88():
         nonlocal pc, t, y, p
         y = (y - 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # INY (INcrement Y)
     def iny_c8():
         nonlocal pc, t, y, p
         y = (y + 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     
     # ROL (ROtate Left)
     # Writes flags: N Z C
@@ -2133,8 +2133,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
         t += 2
-        pc += 1
-        return
+        return next_op
     def rol_26_zero_page():
         nonlocal pc, t, p
         addr = resolve_zero_page(pc)
@@ -2142,8 +2141,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def rol_36_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -2151,8 +2150,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def rol_2e_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -2160,8 +2159,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def rol_3e_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -2169,8 +2168,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         store(addr, r&0xFF)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # ROR (ROtate Right)
     # Writes flags: N Z C
@@ -2180,8 +2179,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (a&C)
         a = r & 0xFF
         t += 2
-        pc += 1
-        return
+        return next_op
     def ror_66_zero_page():
         nonlocal pc, t, p
         addr = resolve_zero_page(pc)
@@ -2190,8 +2188,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r&0xFF)
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ror_76_zero_page_indexed_x():
         nonlocal pc, t, p
         addr = resolve_zero_page_indexed_x(pc)
@@ -2200,8 +2198,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def ror_6e_absolute():
         nonlocal pc, t, p
         addr = resolve_absolute(pc)
@@ -2210,8 +2208,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r&0xFF)
         t += 6
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def ror_7e_absolute_indexed_x():
         nonlocal pc, t, p
         addr = resolve_absolute_indexed_x_no_extra_cycle(pc)
@@ -2220,8 +2218,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (m&C)
         store(addr, r&0xFF)
         t += 7
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # RTI (ReTurn from Interrupt)
     # Writes flags: all
@@ -2234,7 +2232,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         s = (s+1) & 0xFF
         pc |= fetch(STACK_OFFSET+s) << 8
         t += 6
-        return pc
+        return next_op
     
     # RTS (ReTurn from Subroutine)
     # Writes flags: none
@@ -2246,7 +2244,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         pc |= fetch(STACK_OFFSET+s) << 8
         t += 6
         pc += 1
-        return
+        return next_op
     
     # SBC (SuBtract with Carry)
     # Writes flags: N V Z C
@@ -2257,8 +2255,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 2
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sbc_e5_zero_page():
         nonlocal pc, t, p, a
         addr = resolve_zero_page(pc)
@@ -2267,8 +2265,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sbc_f5_zero_page_indexed_x():
         nonlocal pc, t, p, a
         addr = resolve_zero_page_indexed_x(pc)
@@ -2277,8 +2275,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sbc_ed_absolute():
         nonlocal pc, t, p, a
         addr = resolve_absolute(pc)
@@ -2287,8 +2285,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sbc_fd_absolute_indexed_x():
         nonlocal pc, t, p, a
         addr = resolve_absolute_indexed_x(pc)
@@ -2297,8 +2295,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sbc_f9_absolute_indexed_y():
         nonlocal pc, t, p, a
         addr = resolve_absolute_indexed_y(pc)
@@ -2307,8 +2305,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sbc_e1_indexed_indirect():
         nonlocal pc, t, p, a
         addr = resolve_indexed_indirect(pc)
@@ -2317,8 +2315,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sbc_f1_indirect_indexed():
         nonlocal pc, t, p, a
         addr = resolve_indirect_indexed(pc)
@@ -2327,8 +2325,8 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
         t += 5
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # STA (STore Accumulator)
     # Writes flags: none
@@ -2336,44 +2334,44 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t
         store(resolve_zero_page(pc), a)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sta_95_zero_page_indexed_x():
         nonlocal pc, t
         store(resolve_zero_page_indexed_x(pc), a)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sta_8d_absolute():
         nonlocal pc, t
         store(resolve_absolute(pc), a)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sta_9d_absolute_indexed_x():
         nonlocal pc, t
         store(resolve_absolute_indexed_x_no_extra_cycle(pc), a)
         t += 5
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sta_99_absolute_indexed_y():
         nonlocal pc, t
         store(resolve_absolute_indexed_y_no_extra_cycle(pc), a)
         t += 5
-        pc += 3
-        return
+        pc += 2
+        return next_op
     def sta_81_indexed_indirect():
         nonlocal pc, t
         store(resolve_indexed_indirect(pc), a)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sta_91_indirect_indexed():
         nonlocal pc, t
         store(resolve_indirect_indexed_no_extra_cycle(pc), a)
         t += 6
-        pc += 2
-        return
+        pc += 1
+        return next_op
     
     # Stack Instructions
     # TXS (Transfer X to Stack ptr)
@@ -2381,24 +2379,21 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t, s
         s = x
         t += 2
-        pc += 1
-        return
+        return next_op
     # TSX (Transfer Stack ptr to X)
     def tsx_ba():
         nonlocal pc, t, x, p
         x = s
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
         t += 2
-        pc += 1
-        return
+        return next_op
     # PHA (PusH Accumulator)
     def pha_48():
         nonlocal pc, t, s
         store(STACK_OFFSET+s, a)
         s = (s-1) & 0xFF
         t += 3
-        pc += 1
-        return
+        return next_op
     # PLA (PuLl Accumulator)
     def pla_68():
         nonlocal pc, t, s, a, p
@@ -2406,24 +2401,21 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         a = fetch(STACK_OFFSET+s)
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         t += 4
-        pc += 1
-        return
+        return next_op
     # PHP (PusH Processor status)
     def php_08():
         nonlocal pc, t, s
         store(STACK_OFFSET+s, p|B|U)
         s = (s-1) & 0xFF
         t += 3
-        pc += 1
-        return
+        return next_op
     # PLP (PuLl Processor status)
     def plp_28():
         nonlocal pc, t, s, p
         s = (s+1) & 0xFF
         p = fetch(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
         t += 4
-        pc += 1
-        return
+        return next_op
     
     # STX (STore X register)
     # Writes flags: none
@@ -2431,20 +2423,20 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t
         store(resolve_zero_page(pc), x)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def stx_96_zero_page_indexed_y():
         nonlocal pc, t
         store(resolve_zero_page_indexed_y(pc), x)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def stx_8e_absolute():
         nonlocal pc, t
         store(resolve_absolute(pc), x)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
     
     # STY (STore Y register)
     # Writes flags: none
@@ -2452,20 +2444,20 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         nonlocal pc, t
         store(resolve_zero_page(pc), y)
         t += 3
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sty_94_zero_page_indexed_x():
         nonlocal pc, t
         store(resolve_zero_page_indexed_x(pc), y)
         t += 4
-        pc += 2
-        return
+        pc += 1
+        return next_op
     def sty_8c_absolute():
         nonlocal pc, t
         store(resolve_absolute(pc), y)
         t += 4
-        pc += 3
-        return
+        pc += 2
+        return next_op
 
     def build_undefined_op(opcode):
         def undefined_op(pc):
@@ -2625,11 +2617,14 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
     ops[0x94] = sty_94_zero_page_indexed_x
     ops[0x8c] = sty_8c_absolute
 
+    _next_op = next_op
     def tick():
-        ops[fetch(pc)]()
+        nonlocal _next_op
+        _next_op = _next_op()
         return t
 
     def trigger_interrupt(new_pc):
+        nonlocal _next_op
         nonlocal pc, t, s
         store(STACK_OFFSET+s, pc>>8)
         s = (s-1) & 0xFF
@@ -2639,6 +2634,7 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         s = (s-1) & 0xFF
         t += 7
         pc = new_pc
+        _next_op = next_op
 
     def trigger_nmi():
         trigger_interrupt(fetch(0xFFFA)|(fetch(0xFFFB)<<8))
@@ -2648,8 +2644,9 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
 
     def trigger_irq():
         if p&I:
-            return
+            return next_op
         trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
+        return _next_op
 
     def transfer_page_to_oam(page_num):
         nonlocal t
