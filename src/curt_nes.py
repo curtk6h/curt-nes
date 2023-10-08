@@ -1140,15 +1140,13 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
     fetch = store = write_oam = None
     
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
+
+    addr = 0x0000  # used internally only
     
     # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
     
     # Resolve address per mode
 
-    def resolve_immediate(pc):
-        return pc
-    def resolve_zero_page(pc):
-        return fetch(pc)
     def resolve_zero_page_indexed_x(pc):
         return (fetch(pc)+x) & 0xFF
     def resolve_zero_page_indexed_y(pc):
@@ -1191,6 +1189,54 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         t += (((pc&0xFF)+rel_addr)>>8) & 1
         return pc + rel_addr
 
+    # Resolve address per mode (per cycle)
+
+    def resolve_immediate(pc):
+        return pc
+    def resolve_zero_page(pc):
+        return fetch(pc)
+    # def resolve_zero_page_indexed_x(pc):
+    #     return (fetch(pc)+x) & 0xFF
+    # def resolve_zero_page_indexed_y(pc):
+    #     return (fetch(pc)+y) & 0xFF
+    # def resolve_absolute(pc):
+    #     return (fetch(pc)|(fetch(pc+1)<<8))
+    # def resolve_absolute_indexed_x(pc):
+    #     nonlocal t
+    #     addr = fetch(pc) + x
+    #     t += addr>>8
+    #     return (addr+(fetch(pc+1)<<8)) & 0xFFFF
+    # def resolve_absolute_indexed_y(pc):
+    #     nonlocal t
+    #     addr = fetch(pc) + y
+    #     t += addr>>8
+    #     return (addr+(fetch(pc+1)<<8)) & 0xFFFF
+    # def resolve_absolute_indexed_x_no_extra_cycle(pc):
+    #     return ((fetch(pc)|(fetch(pc+1)<<8))+x) & 0xFFFF
+    # def resolve_absolute_indexed_y_no_extra_cycle(pc):
+    #     return ((fetch(pc)|(fetch(pc+1)<<8))+y) & 0xFFFF
+    # def resolve_indexed_indirect(pc):
+    #     i = fetch(pc) + x
+    #     return fetch(i&0xFF)|(fetch((i+1)&0xFF)<<8)
+    # def resolve_indirect_indexed(pc):
+    #     nonlocal t
+    #     i = fetch(pc)
+    #     addr = fetch(i) + y
+    #     t += addr>>8
+    #     return (addr+(fetch((i+1)&0xFF)<<8)) & 0xFFFF
+    # def resolve_indirect_indexed_no_extra_cycle(pc):
+    #     i = fetch(pc)
+    #     return ((fetch(i)|(fetch((i+1)&0xFF)<<8))+y) & 0xFFFF
+    # def resolve_indirect(pc):
+    #     addr = fetch(pc) | (fetch(pc+1)<<8)
+    #     return fetch(addr) | (fetch((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
+    # def resolve_relative(pc):
+    #     nonlocal t
+    #     rel_addr = signed8(fetch(pc))
+    #     pc += 1
+    #     t += (((pc&0xFF)+rel_addr)>>8) & 1
+    #     return pc + rel_addr
+
     # Instructions
 
     def next_op():
@@ -1207,35 +1253,61 @@ def create_cpu_funcs(regs=None, t=0, stop_on_brk=False):
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 2
         pc += 1
+        t += 2
         return next_op
     def adc_65_zero_page():
+        nonlocal pc, t, addr
+        addr = resolve_zero_page(pc)
+        pc += 1
+        t += 2
+        return adc_65_zero_page_1
+    def adc_65_zero_page_1():
         nonlocal pc, t, a, p
-        m = fetch(resolve_zero_page(pc))
+        m = fetch(addr)
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 3
-        pc += 1
+        t += 1
         return next_op
     def adc_75_zero_page_indexed_x():
+        nonlocal pc, t, addr
+        addr = fetch(pc)
+        t += 2
+        pc += 1
+        return adc_75_zero_page_indexed_x_1
+    def adc_75_zero_page_indexed_x_1():
+        nonlocal pc, t, addr
+        addr = (addr+x) & 0xFF
+        t += 1
+        return adc_75_zero_page_indexed_x_2
+    def adc_75_zero_page_indexed_x_2():
         nonlocal pc, t, a, p
-        m = fetch(resolve_zero_page_indexed_x(pc))
+        m = fetch(addr)
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 4
-        pc += 1
+        t += 1
         return next_op
     def adc_6d_absolute():
+        nonlocal pc, t, addr
+        addr = fetch(pc)
+        t += 2
+        pc += 1
+        return adc_6d_absolute_1
+    def adc_6d_absolute_1():
+        nonlocal pc, t, addr
+        addr |= fetch(pc) << 8
+        t += 1
+        pc += 1
+        return adc_6d_absolute_2
+    def adc_6d_absolute_2():
         nonlocal pc, t, a, p
-        m = fetch(resolve_absolute(pc))
+        m = fetch(addr)
         r = m + a + (p&C)
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         a = r & 0xFF
-        t += 4
-        pc += 2
+        t += 1
         return next_op
     def adc_7d_absolute_indexed_x():
         nonlocal pc, t, a, p
