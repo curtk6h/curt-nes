@@ -169,11 +169,13 @@ class TestCPU(unittest.TestCase):
         cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_insepect_regs = cpu_funcs
 
         def cpu_tick_forever():
+            t = 0
             try:
                 while True:
-                    t = cpu_tick()
+                    cpu_tick()
+                    t += 1
             except VMStop:
-                return t
+                return t - 1
 
         # Patch memory before running
         for i, values in ram_patches:
