@@ -1483,76 +1483,20 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # Branch Instructions
     # BPL (Branch on PLus)
     bpl = relative_branch(lambda: p & N)
-
-    # # BMI (Branch on MInus)
-    # def bmi_30():
-    #     nonlocal pc
-    #     if p & N:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     else:
-    #         pc += 1
-    #     return next_op
-    # # BVC (Branch on oVerflow Clear)
-    # def bvc_50():
-    #     nonlocal pc, t
-    #     if p & V:
-    #         # t += 2
-    #         pc += 1
-    #     else:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     return next_op
-    # # BVS (Branch on oVerflow Set)
-    # def bvs_70():
-    #     nonlocal pc, t
-    #     if p & V:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     else:
-    #         # t += 2
-    #         pc += 1
-    #     return next_op
-    # # BCC (Branch on Carry Clear)
-    # def bcc_90():
-    #     nonlocal pc, t
-    #     if p & C:
-    #         # t += 2
-    #         pc += 1
-    #     else:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     return next_op
-    # # BCS (Branch on Carry Set)
-    # def bcs_b0():
-    #     nonlocal pc, t
-    #     if p & C:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     else:
-    #         # t += 2
-    #         pc += 1
-    #     return next_op
-    # # BNE (Branch on Not Equal)
-    # def bne_d0():
-    #     nonlocal pc, t
-    #     if p & Z:
-    #         # t += 2
-    #         pc += 1
-    #     else:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     return next_op
-    # # BEQ (Branch on EQual)
-    # def beq_f0():
-    #     nonlocal pc, t
-    #     if p & Z:
-    #         # t += 3
-    #         pc = resolve_relative(pc)
-    #     else:
-    #         # t += 2
-    #         pc += 1
-    #     return next_op
+    # BMI (Branch on MInus)
+    bmi = relative_branch(lambda:~p & N)
+    # BVS (Branch on oVerflow Set)
+    bvs = relative_branch(lambda:~p & V)
+    # BVC (Branch on oVerflow Clear)
+    bvc = relative_branch(lambda: p & V)
+    # BCS (Branch on Carry Set)
+    bcs = relative_branch(lambda:~p & C)
+    # BCC (Branch on Carry Clear)
+    bcc = relative_branch(lambda: p & C)
+    # BEQ (Branch on EQual)    
+    beq = relative_branch(lambda:~p & Z)
+    # BNE (Branch on Not Equal)
+    bne = relative_branch(lambda: p & Z)
 
     # BRK (BReaK)
     def brk_implied():
@@ -1598,13 +1542,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x24] = zero_page(bit)
     ops[0x2c] = absolute(bit)
     ops[0x10] = bpl
-    # ops[0x30] = bmi_30
-    # ops[0x50] = bvc_50
-    # ops[0x70] = bvs_70
-    # ops[0x90] = bcc_90
-    # ops[0xb0] = bcs_b0
-    # ops[0xd0] = bne_d0
-    # ops[0xf0] = beq_f0
+    ops[0x30] = bmi
+    ops[0x50] = bvc
+    ops[0x70] = bvs
+    ops[0x90] = bcc
+    ops[0xb0] = bcs
+    ops[0xd0] = bne
+    ops[0xf0] = beq
     ops[0x00] = brk_implied_stop_execution if stop_on_brk else brk_implied
     # ops[0xc9] = cmp_c9_immediate
     # ops[0xc5] = cmp_c5_zero_page
