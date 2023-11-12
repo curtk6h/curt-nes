@@ -1144,15 +1144,20 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
 
     # Internal registers that support addressing
-    adh = 0x00
-    adl = 0x00
-    bah = 0x00
-    bal = 0x00
-    iah = 0x00
-    ial = 0x00
-    off = 0x00
+    adh  = 0x00
+    adl  = 0x00
+    bah  = 0x00
+    bal  = 0x00
+    iah  = 0x00
+    ial  = 0x00
+    off  = 0x00
+
+    # For read/modify/store operations
+    addr = 0x0000 # full 16 bit addess of operand
+    data = 0x00   # operand data
     
-    # NOTE: consider all flag letter names reserved, even if not currently used: c, z, i, d, b, v, n
+    # NOTE: also consider all flag single letter names reserved,
+    #       even if not currently used: c, z, i, d, b, v, n
     
     # # Resolve address per mode
     # def resolve_immediate(pc):
@@ -1209,285 +1214,359 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     #     t += (((pc&0xFF)+rel_addr)>>8) & 1
     #     return pc + rel_addr
 
-    # Instructions
+    # Addressing modes
 
     def next_op():
         nonlocal pc
         opcode = fetch(pc); pc += 1
         return ops[opcode]
-
-    #
-    # ADC
-    #
-
-    def adc_69_immediate():
-        nonlocal pc, a, p
-        m = fetch(pc); pc += 1
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
     
-    def adc_65_zero_page():
-        nonlocal pc, adl
-        adl = fetch(pc); pc += 1
-        return adc_65_zero_page_1
-    def adc_65_zero_page_1():
-        nonlocal pc, a, p
-        m = fetch(adl)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def immediate(f):
+        def immediate_0():
+            nonlocal pc
+            pc += 1
+            return f(pc-1)
+        return immediate_0
+    
+    def zero_page(f):
+        def zero_page_0():
+            nonlocal pc, adl
+            adl = fetch(pc); pc += 1
+            return zero_page_1
+        def zero_page_1():
+            return f(adl)
+        return zero_page_0
+    
+    def zero_page_indexed_x(f):
+        def zero_page_indexed_x_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return zero_page_indexed_x_1
+        def zero_page_indexed_x_1():
+            fetch(bal)  # discarded
+            return zero_page_indexed_x_2
+        def zero_page_indexed_x_2():
+            return f((bal+x)&0xFF)
+        return zero_page_indexed_x_0
+    
+    def zero_page_indexed_y(f):
+        def zero_page_indexed_y_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return zero_page_indexed_y_1
+        def zero_page_indexed_y_1():
+            fetch(bal)  # discarded
+            return zero_page_indexed_y_2
+        def zero_page_indexed_y_2():
+            return f((bal+y)&0xFF)
+        return zero_page_indexed_y_0
 
-    def adc_75_zero_page_indexed_x():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return adc_75_zero_page_indexed_x_1
-    def adc_75_zero_page_indexed_x_1():
-        fetch(bal)  # discarded
-        return adc_75_zero_page_indexed_x_2
-    def adc_75_zero_page_indexed_x_2():
-        nonlocal pc, a, p
-        m = fetch((bal+x)&0xFF)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def absolute(f):
+        def absolute_0():
+            nonlocal pc, adl
+            adl = fetch(pc); pc += 1
+            return absolute_1
+        def absolute_1():
+            nonlocal pc, adh
+            adh = fetch(pc); pc += 1
+            return absolute_2
+        def absolute_2():
+            return f((adh<<8)|adl)
+        return absolute_0
 
-    def adc_6d_absolute():
-        nonlocal pc, adl
-        adl = fetch(pc); pc += 1
-        return adc_6d_absolute_1
-    def adc_6d_absolute_1():
-        nonlocal pc, adh
-        adh = fetch(pc); pc += 1
-        return adc_6d_absolute_2
-    def adc_6d_absolute_2():
-        nonlocal pc, a, p
-        m = fetch((adh<<8)|adl)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def absolute_indexed_x(f):
+        def absolute_indexed_x_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return absolute_indexed_x_1
+        def absolute_indexed_x_1():
+            nonlocal pc, bah
+            bah = fetch(pc); pc += 1
+            return absolute_indexed_x_2 if (bal+x) > 0xFF else absolute_indexed_x_3
+        def absolute_indexed_x_2():
+            fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
+            return absolute_indexed_x_3
+        def absolute_indexed_x_3():
+            return f((((bah<<8)|bal)+x)&0xFFFF)
+        return absolute_indexed_x_0
+    
+    def absolute_indexed_x_always_extra_cycle(f):
+        def absolute_indexed_x_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return absolute_indexed_x_1
+        def absolute_indexed_x_1():
+            nonlocal pc, bah
+            bah = fetch(pc); pc += 1
+            return absolute_indexed_x_2
+        def absolute_indexed_x_2():
+            fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
+            return absolute_indexed_x_3
+        def absolute_indexed_x_3():
+            return f((((bah<<8)|bal)+x)&0xFFFF)
+        return absolute_indexed_x_0
 
-    def adc_7d_absolute_indexed_x():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return adc_7d_absolute_indexed_x_1
-    def adc_7d_absolute_indexed_x_1():
-        nonlocal pc, bah
-        bah = fetch(pc); pc += 1
-        return adc_7d_absolute_indexed_x_2 if (bal+x) > 0xFF else adc_7d_absolute_indexed_x_3
-    def adc_7d_absolute_indexed_x_2():
-        fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
-        return adc_7d_absolute_indexed_x_3
-    def adc_7d_absolute_indexed_x_3():
-        nonlocal pc, a, p
-        m = fetch((((bah<<8)|bal)+x)&0xFFFF)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def absolute_indexed_y(f):
+        def absolute_indexed_y_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return absolute_indexed_y_1
+        def absolute_indexed_y_1():
+            nonlocal pc, bah
+            bah = fetch(pc); pc += 1
+            return absolute_indexed_y_2 if (bal+y) > 0xFF else absolute_indexed_y_3
+        def absolute_indexed_y_2():
+            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            return absolute_indexed_y_3
+        def absolute_indexed_y_3():
+            return f((((bah<<8)|bal)+y)&0xFFFF)
+        return absolute_indexed_y_0
 
-    def adc_79_absolute_indexed_y():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return adc_79_absolute_indexed_y_1
-    def adc_79_absolute_indexed_y_1():
-        nonlocal pc, bah
-        bah = fetch(pc); pc += 1
-        return adc_79_absolute_indexed_y_2 if (bal+y) > 0xFF else adc_79_absolute_indexed_y_3
-    def adc_79_absolute_indexed_y_2():
-        fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-        return adc_79_absolute_indexed_y_3
-    def adc_79_absolute_indexed_y_3():
-        nonlocal pc, a, p
-        m = fetch((((bah<<8)|bal)+y)&0xFFFF)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def absolute_indexed_y_always_extra_cycle(f):
+        def absolute_indexed_y_0():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return absolute_indexed_y_1
+        def absolute_indexed_y_1():
+            nonlocal pc, bah
+            bah = fetch(pc); pc += 1
+            return absolute_indexed_y_2
+        def absolute_indexed_y_2():
+            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            return absolute_indexed_y_3
+        def absolute_indexed_y_3():
+            return f((((bah<<8)|bal)+y)&0xFFFF)
+        return absolute_indexed_y_0
 
-    def adc_61_indexed_indirect():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return adc_61_indexed_indirect_1
-    def adc_61_indexed_indirect_1():
-        fetch(bal)  # discarded
-        return adc_61_indexed_indirect_2
-    def adc_61_indexed_indirect_2():
-        nonlocal adl
-        adl = fetch((bal+x  )&0xFF)
-        return adc_61_indexed_indirect_3
-    def adc_61_indexed_indirect_3():
-        nonlocal adh
-        adh = fetch((bal+x+1)&0xFF)
-        return adc_61_indexed_indirect_4
-    def adc_61_indexed_indirect_4():
-        nonlocal pc, a, p
-        m = fetch((adh<<8)|adl)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def indexed_indirect(f):
+        def indexed_indirect():
+            nonlocal pc, bal
+            bal = fetch(pc); pc += 1
+            return indexed_indirect_1
+        def indexed_indirect_1():
+            fetch(bal)  # discarded
+            return indexed_indirect_2
+        def indexed_indirect_2():
+            nonlocal adl
+            adl = fetch((bal+x)&0xFF)
+            return indexed_indirect_3
+        def indexed_indirect_3():
+            nonlocal adh
+            adh = fetch((bal+x+1)&0xFF)
+            return indexed_indirect_4
+        def indexed_indirect_4():
+            return f((adh<<8)|adl)
+        return indexed_indirect
 
-    def adc_71_indirect_indexed():
-        nonlocal pc, ial
-        ial = fetch(pc); pc += 1
-        return adc_71_indirect_indexed_1
-    def adc_71_indirect_indexed_1():
-        nonlocal bal
-        bal = fetch(ial)
-        return adc_71_indirect_indexed_2
-    def adc_71_indirect_indexed_2():
-        nonlocal bah
-        bah = fetch((ial+1)&0xFF)
-        return adc_71_indirect_indexed_3 if (bal+y) > 0xFF else adc_71_indirect_indexed_4
-    def adc_71_indirect_indexed_3():
-        fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-        return adc_71_indirect_indexed_3
-    def adc_71_indirect_indexed_4():
-        nonlocal pc, a, p
-        m = fetch((((bah<<8)|bal)+y)&0xFFFF)
-        r = m + a + (p&C)
-        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(m^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
-        a = r & 0xFF
-        return next_op
+    def indirect_indexed(f):
+        def indirect_indexed_0():
+            nonlocal pc, ial
+            ial = fetch(pc); pc += 1
+            return indirect_indexed_1
+        def indirect_indexed_1():
+            nonlocal bal
+            bal = fetch(ial)
+            return indirect_indexed_2
+        def indirect_indexed_2():
+            nonlocal bah
+            bah = fetch((ial+1)&0xFF)
+            return indirect_indexed_3 if (bal+y) > 0xFF else indirect_indexed_4
+        def indirect_indexed_3():
+            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            return indirect_indexed_3
+        def indirect_indexed_4():
+            return f((((bah<<8)|bal)+y)&0xFFFF)
+        return indirect_indexed_0
 
-    # 
+    def indirect_indexed_always_extra_cycle(f):
+        def indirect_indexed_0():
+            nonlocal pc, ial
+            ial = fetch(pc); pc += 1
+            return indirect_indexed_1
+        def indirect_indexed_1():
+            nonlocal bal
+            bal = fetch(ial)
+            return indirect_indexed_2
+        def indirect_indexed_2():
+            nonlocal bah
+            bah = fetch((ial+1)&0xFF)
+            return indirect_indexed_3
+        def indirect_indexed_3():
+            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            return indirect_indexed_3
+        def indirect_indexed_4():
+            return f((((bah<<8)|bal)+y)&0xFFFF)
+        return indirect_indexed_0
+
+    def relative_branch(f):   
+        def relative_branch_0():
+            nonlocal pc, off
+            off = signed8(fetch(pc)); pc += 1
+            return next_op if f() else relative_branch_1
+        def relative_branch_1():
+            nonlocal pc, off
+            off += pc & 0xFF # remember this is signed!
+            pc ^= (pc^off) & 0xFF
+            return relative_branch_2 if off & 0x100 else next_op
+        def relative_branch_2():
+            nonlocal pc
+            pc += off & ~0xFF # add carry (may be negative)
+            return next_op
+        return relative_branch_0
+
+    def fetch_op(f):
+        def fetch_op_0(addr):
+            f(fetch(addr))
+            return next_op
+        return fetch_op_0
+
+    def store_op(f):
+        def store_op_0(addr):
+            store(addr, f())
+            return next_op
+        return store_op_0
+
+    def fetch_modify_store_op(f):
+        def fetch_modify_store_op_0(_addr):
+            nonlocal addr, data
+            addr = _addr
+            data = fetch(addr)
+            return fetch_modify_store_op_1
+        def fetch_modify_store_op_1():
+            nonlocal data
+            data = f(data)
+            return fetch_modify_store_op_2
+        def fetch_modify_store_op_2():
+            store(addr, data)
+            return next_op
+        return fetch_modify_store_op_0
+    
+    def modify_a_op(f):
+        def modify_a_op_0():
+            nonlocal a
+            a = f(a)
+            return next_op
+        return modify_a_op_0
+
+    # Instructions
+
+    # ADC (ADd with Carry)
+    @fetch_op
+    def adc(data):
+        nonlocal a, p
+        r = data + a + (p&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)&(data^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        a = r & 0xFF
+
     # AND (bitwise AND with accumulator)
-    #
-
-    def and_29_immediate():
-        nonlocal pc, a, p
-        a &= fetch(pc); pc += 1
+    @fetch_op
+    def and_(data):
+        nonlocal a, p
+        a &= data
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
 
-    def and_25_zero_page():
-        nonlocal pc, adl
-        adl = fetch(pc); pc += 1
-        return and_25_zero_page_1
-    def and_25_zero_page_1():
-        nonlocal pc, a, p
-        a &= fetch(adl)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+    # ASL (Arithmetic Shift Left)
+    def asl(data):
+        nonlocal p
+        r = data << 1
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        return r & 0xFF
+    asl_a = modify_a_op(asl)
+    asl = fetch_modify_store_op(asl)
 
-    def and_35_zero_page_indexed_x():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return and_35_zero_page_indexed_x_1
-    def and_35_zero_page_indexed_x_1():
-        fetch(bal)  # discarded
-        return and_35_zero_page_indexed_x_2
-    def and_35_zero_page_indexed_x_2():
-        nonlocal pc, a, p
-        a &= fetch((bal+x)&0xFF)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+    # BIT (test BITs)
+    @fetch_op
+    def bit(data):
+        nonlocal p
+        p = (p&MASK_NVZ) | (data & N) | (data & V) | (0x00 if (data&a) else Z)
 
-    def and_2d_absolute():
-        nonlocal pc, adl
-        adl = fetch(pc); pc += 1
-        return and_2d_absolute_1
-    def and_2d_absolute_1():
-        nonlocal pc, adh
-        adh = fetch(pc); pc += 1
-        return and_2d_absolute_2
-    def and_2d_absolute_2():
-        nonlocal pc, a, p
-        a &= fetch((adh<<8)|adl)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+    # Branch Instructions
+    # BPL (Branch on PLus)
+    bpl = relative_branch(lambda: p & N)
 
-    def and_3d_absolute_indexed_x():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return and_3d_absolute_indexed_x_1
-    def and_3d_absolute_indexed_x_1():
-        nonlocal pc, bah
-        bah = fetch(pc); pc += 1
-        return and_3d_absolute_indexed_x_2 if (bal+x) > 0xFF else and_3d_absolute_indexed_x_3
-    def and_3d_absolute_indexed_x_2():
-        fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
-        return and_3d_absolute_indexed_x_3
-    def and_3d_absolute_indexed_x_3():
-        nonlocal pc, a, p
-        a &= fetch((((bah<<8)|bal)+x)&0xFFFF)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
-
-    def and_39_absolute_indexed_y():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return and_39_absolute_indexed_y_1
-    def and_39_absolute_indexed_y_1():
-        nonlocal pc, bah
-        bah = fetch(pc); pc += 1
-        return and_39_absolute_indexed_y_2 if (bal+y) > 0xFF else and_39_absolute_indexed_y_3
-    def and_39_absolute_indexed_y_2():
-        fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-        return and_39_absolute_indexed_y_3
-    def and_39_absolute_indexed_y_3():
-        nonlocal pc, a, p
-        a &= fetch((((bah<<8)|bal)+y)&0xFFFF)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
-
-    def and_21_indexed_indirect():
-        nonlocal pc, bal
-        bal = fetch(pc); pc += 1
-        return and_21_indexed_indirect_1
-    def and_21_indexed_indirect_1():
-        fetch(bal)  # discarded
-        return and_21_indexed_indirect_2
-    def and_21_indexed_indirect_2():
-        nonlocal adl
-        adl = fetch((bal+x)&0xFF)
-        return and_21_indexed_indirect_3
-    def and_21_indexed_indirect_3():
-        nonlocal adh
-        adh = fetch((bal+x+1)&0xFF)
-        return and_21_indexed_indirect_4
-    def and_21_indexed_indirect_4():
-        nonlocal pc, a, p
-        a &= fetch((adh<<8)|adl)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
-
-    def and_31_indirect_indexed():
-        nonlocal pc, ial
-        ial = fetch(pc); pc += 1
-        return and_31_indirect_indexed_1
-    def and_31_indirect_indexed_1():
-        nonlocal bal
-        bal = fetch(ial)
-        return and_31_indirect_indexed_2
-    def and_31_indirect_indexed_2():
-        nonlocal bah
-        bah = fetch((ial+1)&0xFF)
-        return and_31_indirect_indexed_3 if (bal+y) > 0xFF else and_31_indirect_indexed_4
-    def and_31_indirect_indexed_3():
-        fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-        return and_31_indirect_indexed_3
-    def and_31_indirect_indexed_4():
-        nonlocal pc, a, p
-        a &= fetch((((bah<<8)|bal)+y)&0xFFFF)
-        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+    # # BMI (Branch on MInus)
+    # def bmi_30():
+    #     nonlocal pc
+    #     if p & N:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     else:
+    #         pc += 1
+    #     return next_op
+    # # BVC (Branch on oVerflow Clear)
+    # def bvc_50():
+    #     nonlocal pc, t
+    #     if p & V:
+    #         # t += 2
+    #         pc += 1
+    #     else:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     return next_op
+    # # BVS (Branch on oVerflow Set)
+    # def bvs_70():
+    #     nonlocal pc, t
+    #     if p & V:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     else:
+    #         # t += 2
+    #         pc += 1
+    #     return next_op
+    # # BCC (Branch on Carry Clear)
+    # def bcc_90():
+    #     nonlocal pc, t
+    #     if p & C:
+    #         # t += 2
+    #         pc += 1
+    #     else:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     return next_op
+    # # BCS (Branch on Carry Set)
+    # def bcs_b0():
+    #     nonlocal pc, t
+    #     if p & C:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     else:
+    #         # t += 2
+    #         pc += 1
+    #     return next_op
+    # # BNE (Branch on Not Equal)
+    # def bne_d0():
+    #     nonlocal pc, t
+    #     if p & Z:
+    #         # t += 2
+    #         pc += 1
+    #     else:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     return next_op
+    # # BEQ (Branch on EQual)
+    # def beq_f0():
+    #     nonlocal pc, t
+    #     if p & Z:
+    #         # t += 3
+    #         pc = resolve_relative(pc)
+    #     else:
+    #         # t += 2
+    #         pc += 1
+    #     return next_op
 
     # BRK (BReaK)
-    # Writes flags: B
-    def brk_00_implied():
+    def brk_implied():
         nonlocal p
         p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
         return trigger_irq()
-    def brk_00_implied_stop_execution():  # for unit testing / debugging
+    def brk_implied_stop_execution():  # for unit testing / debugging
         nonlocal pc
         pc -= 1 # REMOVE ME: this is to avoid updating tests after breaking ops into cycles
         raise VMStop()
+
+    # NOP (No OPeration)
+    def nop_implied():
+        return next_op
 
     def build_undefined_op(opcode):
         def undefined_op(pc):
@@ -1495,30 +1574,30 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         return undefined_op
 
     ops = [build_undefined_op(opcode) for opcode in range(0x100)]
-    ops[0x69] = adc_69_immediate
-    ops[0x65] = adc_65_zero_page
-    ops[0x75] = adc_75_zero_page_indexed_x
-    ops[0x6d] = adc_6d_absolute
-    ops[0x7d] = adc_7d_absolute_indexed_x
-    ops[0x79] = adc_79_absolute_indexed_y
-    ops[0x61] = adc_61_indexed_indirect
-    ops[0x71] = adc_71_indirect_indexed
-    ops[0x29] = and_29_immediate
-    ops[0x25] = and_25_zero_page
-    ops[0x35] = and_35_zero_page_indexed_x
-    ops[0x2d] = and_2d_absolute
-    ops[0x3d] = and_3d_absolute_indexed_x
-    ops[0x39] = and_39_absolute_indexed_y
-    ops[0x21] = and_21_indexed_indirect
-    ops[0x31] = and_31_indirect_indexed
-    # ops[0x0a] = asl_0a_accumulator
-    # ops[0x06] = asl_06_zero_page
-    # ops[0x16] = asl_16_zero_page_indexed_x
-    # ops[0x0e] = asl_0e_absolute
-    # ops[0x1e] = asl_1e_absolute_indexed_x
-    # ops[0x24] = bit_24_zero_page
-    # ops[0x2c] = bit_2c_absolute
-    # ops[0x10] = bpl_10
+    ops[0x69] = immediate(adc)
+    ops[0x65] = zero_page(adc)
+    ops[0x75] = zero_page_indexed_x(adc)
+    ops[0x6d] = absolute(adc)
+    ops[0x7d] = absolute_indexed_x(adc)
+    ops[0x79] = absolute_indexed_y(adc)
+    ops[0x61] = indexed_indirect(adc)
+    ops[0x71] = indirect_indexed(adc)
+    ops[0x29] = immediate(and_)
+    ops[0x25] = zero_page(and_)
+    ops[0x35] = zero_page_indexed_x(and_)
+    ops[0x2d] = absolute(and_)
+    ops[0x3d] = absolute_indexed_x(and_)
+    ops[0x39] = absolute_indexed_y(and_)
+    ops[0x21] = indexed_indirect(and_)
+    ops[0x31] = indirect_indexed(and_)
+    ops[0x0a] = asl_a
+    ops[0x06] = zero_page(asl)
+    ops[0x16] = zero_page_indexed_x(asl)
+    ops[0x0e] = absolute(asl)
+    ops[0x1e] = absolute_indexed_x_always_extra_cycle(asl)
+    ops[0x24] = zero_page(bit)
+    ops[0x2c] = absolute(bit)
+    ops[0x10] = bpl
     # ops[0x30] = bmi_30
     # ops[0x50] = bvc_50
     # ops[0x70] = bvs_70
@@ -1526,7 +1605,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # ops[0xb0] = bcs_b0
     # ops[0xd0] = bne_d0
     # ops[0xf0] = beq_f0
-    ops[0x00] = brk_00_implied_stop_execution if stop_on_brk else brk_00_implied
+    ops[0x00] = brk_implied_stop_execution if stop_on_brk else brk_implied
     # ops[0xc9] = cmp_c9_immediate
     # ops[0xc5] = cmp_c5_zero_page
     # ops[0xd5] = cmp_d5_zero_page_indexed_x
@@ -1590,7 +1669,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # ops[0x56] = lsr_56_zero_page_indexed_x
     # ops[0x4e] = lsr_4e_absolute
     # ops[0x5e] = lsr_5e_absolute_indexed_x
-    # ops[0xea] = nop_ea_implied
+    ops[0xea] = nop_implied
     # ops[0x09] = ora_09_immediate
     # ops[0x05] = ora_05_zero_page
     # ops[0x15] = ora_15_zero_page_indexed_x
