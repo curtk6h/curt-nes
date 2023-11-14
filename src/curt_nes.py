@@ -1515,6 +1515,80 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         r = a - data
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
 
+    # CPX (ComPare X register)
+    @fetch_op
+    def cpx(data):
+        nonlocal p
+        r = x - data
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+
+    # CPY (ComPare Y register)
+    @fetch_op
+    def cpy(data):
+        nonlocal p
+        r = y - data
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+
+    # DEC (DECrement memory)
+    @fetch_modify_store_op
+    def dec(data):
+        nonlocal p
+        r = data - 1
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
+        return r & 0xFF
+
+    # EOR (bitwise Exclusive OR)
+    @fetch_op
+    def eor(data):
+        nonlocal a, p
+        a ^= data
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+
+    # Flag (Processor Status) Instructions
+    # CLC (CLear Carry)
+    def clc():
+        nonlocal p
+        p &= MASK_C
+        return next_op
+    # SEC (SEt Carry)
+    def sec():
+        nonlocal p
+        p |= C
+        return next_op
+    # CLI (CLear Interrupt)
+    def cli():
+        nonlocal p
+        p &= MASK_I
+        return next_op
+    # SEI (SEt Interrupt)
+    def sei():
+        nonlocal p
+        p |= I
+        return next_op
+    # CLV (CLear oVerflow)
+    def clv():
+        nonlocal p
+        p &= MASK_V
+        return next_op
+    # CLD (CLear Decimal)
+    def cld():
+        nonlocal p
+        p &= MASK_D
+        return next_op
+    # SED (SEt Decimal)
+    def sed():
+        nonlocal p
+        p |= D
+        return next_op
+    
+    # INC (INCrement memory)
+    @fetch_modify_store_op
+    def inc(data):
+        nonlocal p
+        r = data + 1
+        p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
+        return r & 0xFF
+
     # NOP (No OPeration)
     def nop_implied():
         return next_op
@@ -1565,35 +1639,35 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0xd9] = absolute_indexed_y(cmp)
     ops[0xc1] = indexed_indirect(cmp)
     ops[0xd1] = indirect_indexed(cmp)
-    # ops[0xe0] = immediate(cpx)
-    # ops[0xe4] = zero_page(cpx)
-    # ops[0xec] = absolute(cpx)
-    # ops[0xc0] = immediate(cpy)
-    # ops[0xc4] = zero_page(cpy)
-    # ops[0xcc] = absolute(cpy)
-    # ops[0xc6] = zero_page(dec)
-    # ops[0xd6] = zero_page_indexed_x(dec)
-    # ops[0xce] = absolute(dec)
-    # ops[0xde] = absolute_indexed_x(dec)
-    # ops[0x49] = immediate(eor)
-    # ops[0x45] = zero_page(eor)
-    # ops[0x55] = zero_page_indexed_x(eor)
-    # ops[0x4d] = absolute(eor)
-    # ops[0x5d] = absolute_indexed_x(eor)
-    # ops[0x59] = absolute_indexed_y(eor)
-    # ops[0x41] = indexed_indirect(eor)
-    # ops[0x51] = indirect_indexed(eor)
-    # ops[0x18] = clc_18
-    # ops[0x38] = sec_38
-    # ops[0x58] = cli_58
-    # ops[0x78] = sei_78
-    # ops[0xb8] = clv_b8
-    # ops[0xd8] = cld_d8
-    # ops[0xf8] = sed_f8
-    # ops[0xe6] = zero_page(inc)
-    # ops[0xf6] = zero_page_indexed_x(inc)
-    # ops[0xee] = absolute(inc)
-    # ops[0xfe] = absolute_indexed_x(inc)
+    ops[0xe0] = immediate(cpx)
+    ops[0xe4] = zero_page(cpx)
+    ops[0xec] = absolute(cpx)
+    ops[0xc0] = immediate(cpy)
+    ops[0xc4] = zero_page(cpy)
+    ops[0xcc] = absolute(cpy)
+    ops[0xc6] = zero_page(dec)
+    ops[0xd6] = zero_page_indexed_x(dec)
+    ops[0xce] = absolute(dec)
+    ops[0xde] = absolute_indexed_x_always_extra_cycle(dec)
+    ops[0x49] = immediate(eor)
+    ops[0x45] = zero_page(eor)
+    ops[0x55] = zero_page_indexed_x(eor)
+    ops[0x4d] = absolute(eor)
+    ops[0x5d] = absolute_indexed_x(eor)
+    ops[0x59] = absolute_indexed_y(eor)
+    ops[0x41] = indexed_indirect(eor)
+    ops[0x51] = indirect_indexed(eor)
+    ops[0x18] = clc
+    ops[0x38] = sec
+    ops[0x58] = cli
+    ops[0x78] = sei
+    ops[0xb8] = clv
+    ops[0xd8] = cld
+    ops[0xf8] = sed
+    ops[0xe6] = zero_page(inc)
+    ops[0xf6] = zero_page_indexed_x(inc)
+    ops[0xee] = absolute(inc)
+    ops[0xfe] = absolute_indexed_x_always_extra_cycle(inc)
     # ops[0x4c] = absolute(jmp)
     # ops[0x6c] = indirect(jmp)
     # ops[0x20] = absolute(jsr)
