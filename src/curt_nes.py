@@ -1373,7 +1373,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             return indirect_indexed_3 if (bal+y) > 0xFF else indirect_indexed_4
         def indirect_indexed_3():
             fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-            return indirect_indexed_3
+            return indirect_indexed_4
         def indirect_indexed_4():
             return f((((bah<<8)|bal)+y)&0xFFFF)
         return indirect_indexed_0
@@ -1393,7 +1393,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             return indirect_indexed_3
         def indirect_indexed_3():
             fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-            return indirect_indexed_3
+            return indirect_indexed_4
         def indirect_indexed_4():
             return f((((bah<<8)|bal)+y)&0xFFFF)
         return indirect_indexed_0
@@ -1589,6 +1589,51 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         return r & 0xFF
 
+    # # JMP (JuMP)
+    # def jmp_4c_absolute():
+    #     nonlocal pc, t
+    #     # t += 3
+    #     pc = resolve_absolute(pc)
+    #     return next_op
+    # def jmp_6c_indirect():
+    #     nonlocal pc, t
+    #     # t += 5
+    #     pc = resolve_indirect(pc)
+    #     return next_op
+    # # JSR (Jump to SubRoutine)
+    # def jsr_20_absolute():
+    #     nonlocal pc, t, s
+    #     to = resolve_absolute(pc)
+    #     pc += 1 # 2 - 1 (offset by one before storing on stack)
+    #     store(STACK_OFFSET+s, pc>>8)
+    #     s = (s-1) & 0xFF
+    #     store(STACK_OFFSET+s, pc&0xFF)
+    #     s = (s-1) & 0xFF
+    #     # t += 6
+    #     pc = to
+    #     return next_op
+
+    # LDA (LoaD Accumulator)
+    @fetch_op
+    def lda(data):
+        nonlocal a, p
+        a = data
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+
+    # LDX (LoaD X register)
+    @fetch_op
+    def ldx(data):
+        nonlocal x, p
+        x = data
+        p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
+
+    # LDY (LoaD Y register)
+    @fetch_op
+    def ldy(data):
+        nonlocal y, p
+        y = data
+        p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
+
     # NOP (No OPeration)
     def nop_implied():
         return next_op
@@ -1671,24 +1716,24 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # ops[0x4c] = absolute(jmp)
     # ops[0x6c] = indirect(jmp)
     # ops[0x20] = absolute(jsr)
-    # ops[0xa9] = immediate(lda)
-    # ops[0xa5] = zero_page(lda)
-    # ops[0xb5] = zero_page_indexed_x(lda)
-    # ops[0xad] = absolute(lda)
-    # ops[0xbd] = absolute_indexed_x(lda)
-    # ops[0xb9] = absolute_indexed_y(lda)
-    # ops[0xa1] = indexed_indirect(lda)
-    # ops[0xb1] = indirect_indexed(lda)
-    # ops[0xa2] = immediate(ldx)
-    # ops[0xa6] = zero_page(ldx)
-    # ops[0xb6] = zero_page_indexed_y(ldx)
-    # ops[0xae] = absolute(ldx)
-    # ops[0xbe] = absolute_indexed_y(ldx)
-    # ops[0xa0] = immediate(ldy)
-    # ops[0xa4] = zero_page(ldy)
-    # ops[0xb4] = zero_page_indexed_x(ldy)
-    # ops[0xac] = absolute(ldy)
-    # ops[0xbc] = absolute_indexed_x(ldy)
+    ops[0xa9] = immediate(lda)
+    ops[0xa5] = zero_page(lda)
+    ops[0xb5] = zero_page_indexed_x(lda)
+    ops[0xad] = absolute(lda)
+    ops[0xbd] = absolute_indexed_x(lda)
+    ops[0xb9] = absolute_indexed_y(lda)
+    ops[0xa1] = indexed_indirect(lda)
+    ops[0xb1] = indirect_indexed(lda)
+    ops[0xa2] = immediate(ldx)
+    ops[0xa6] = zero_page(ldx)
+    ops[0xb6] = zero_page_indexed_y(ldx)
+    ops[0xae] = absolute(ldx)
+    ops[0xbe] = absolute_indexed_y(ldx)
+    ops[0xa0] = immediate(ldy)
+    ops[0xa4] = zero_page(ldy)
+    ops[0xb4] = zero_page_indexed_x(ldy)
+    ops[0xac] = absolute(ldy)
+    ops[0xbc] = absolute_indexed_x(ldy)
     # ops[0x4a] = accumulator(lsr)
     # ops[0x46] = zero_page(lsr)
     # ops[0x56] = zero_page_indexed_x(lsr)
