@@ -1651,6 +1651,15 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         y = data
         p = (p&MASK_NZ) | (0x00 if y else Z) | (y&N)
 
+    # LSR (Logical Shift Right)
+    def lsr(data):
+        nonlocal p
+        r = data >> 1
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (data&C)
+        return r
+    lsr_accumulator = modify_a_op(lsr)
+    lsr = fetch_modify_store_op(lsr)
+
     # NOP (No OPeration)
     def nop_implied():
         return next_op
@@ -1751,11 +1760,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0xb4] = zero_page_indexed_x(ldy)
     ops[0xac] = absolute(ldy)
     ops[0xbc] = absolute_indexed_x(ldy)
-    # ops[0x4a] = accumulator(lsr)
-    # ops[0x46] = zero_page(lsr)
-    # ops[0x56] = zero_page_indexed_x(lsr)
-    # ops[0x4e] = absolute(lsr)
-    # ops[0x5e] = absolute_indexed_x(lsr)
+    ops[0x4a] = lsr_accumulator
+    ops[0x46] = zero_page(lsr)
+    ops[0x56] = zero_page_indexed_x(lsr)
+    ops[0x4e] = absolute(lsr)
+    ops[0x5e] = absolute_indexed_x_always_extra_cycle(lsr)
     ops[0xea] = nop_implied
     # ops[0x09] = immediate(ora)
     # ops[0x05] = zero_page(ora)
