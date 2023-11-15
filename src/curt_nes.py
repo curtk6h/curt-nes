@@ -1660,6 +1660,10 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     lsr_accumulator = modify_a_op(lsr)
     lsr = fetch_modify_store_op(lsr)
 
+    # NOP (No OPeration)
+    def nop_implied():
+        return next_op
+
     # ORA (bitwise OR with Accumulator)
     @fetch_op
     def ora(data):
@@ -1667,9 +1671,23 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         a |= data
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
 
-    # NOP (No OPeration)
-    def nop_implied():
-        return next_op
+    # ROL (ROtate Left)
+    def rol(data):
+        nonlocal p
+        r = (data<<1) | (p&C)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
+        return r & 0xFF
+    rol_accumulator = modify_a_op(rol)
+    rol = fetch_modify_store_op(rol)
+
+    # ROR (ROtate Right)
+    def ror(data):
+        nonlocal p
+        r = (data>>1) | ((p&C)<<7)
+        p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (data&C)
+        return r & 0xFF
+    ror_accumulator = modify_a_op(ror)
+    ror = fetch_modify_store_op(ror)
 
     def build_undefined_op(opcode):
         def undefined_op(pc):
@@ -1789,16 +1807,16 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # ops[0x98] = tya_98
     # ops[0x88] = dey_88
     # ops[0xc8] = iny_c8
-    # ops[0x2a] = accumulator(rol)
-    # ops[0x26] = zero_page(rol)
-    # ops[0x36] = zero_page_indexed_x(rol)
-    # ops[0x2e] = absolute(rol)
-    # ops[0x3e] = absolute_indexed_x(rol)
-    # ops[0x6a] = accumulator(ror)
-    # ops[0x66] = zero_page(ror)
-    # ops[0x76] = zero_page_indexed_x(ror)
-    # ops[0x6e] = absolute(ror)
-    # ops[0x7e] = absolute_indexed_x(ror)
+    ops[0x2a] = rol_accumulator
+    ops[0x26] = zero_page(rol)
+    ops[0x36] = zero_page_indexed_x(rol)
+    ops[0x2e] = absolute(rol)
+    ops[0x3e] = absolute_indexed_x_always_extra_cycle(rol)
+    ops[0x6a] = ror_accumulator
+    ops[0x66] = zero_page(ror)
+    ops[0x76] = zero_page_indexed_x(ror)
+    ops[0x6e] = absolute(ror)
+    ops[0x7e] = absolute_indexed_x_always_extra_cycle(ror)
     # ops[0x40] = implied(rti)
     # ops[0x60] = implied(rts)
     # ops[0xe9] = immediate(sbc)
