@@ -1660,6 +1660,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     lsr_accumulator = modify_a_op(lsr)
     lsr = fetch_modify_store_op(lsr)
 
+    # ORA (bitwise OR with Accumulator)
+    @fetch_op
+    def ora(data):
+        nonlocal a, p
+        a |= data
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+
     # NOP (No OPeration)
     def nop_implied():
         return next_op
@@ -1766,14 +1773,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x4e] = absolute(lsr)
     ops[0x5e] = absolute_indexed_x_always_extra_cycle(lsr)
     ops[0xea] = nop_implied
-    # ops[0x09] = immediate(ora)
-    # ops[0x05] = zero_page(ora)
-    # ops[0x15] = zero_page_indexed_x(ora)
-    # ops[0x0d] = absolute(ora)
-    # ops[0x1d] = absolute_indexed_x(ora)
-    # ops[0x19] = absolute_indexed_y(ora)
-    # ops[0x01] = indexed_indirect(ora)
-    # ops[0x11] = indirect_indexed(ora)
+    ops[0x09] = immediate(ora)
+    ops[0x05] = zero_page(ora)
+    ops[0x15] = zero_page_indexed_x(ora)
+    ops[0x0d] = absolute(ora)
+    ops[0x1d] = absolute_indexed_x(ora)
+    ops[0x19] = absolute_indexed_y(ora)
+    ops[0x01] = indexed_indirect(ora)
+    ops[0x11] = indirect_indexed(ora)
     # ops[0xaa] = tax_aa
     # ops[0x8a] = txa_8a
     # ops[0xca] = dex_ca
