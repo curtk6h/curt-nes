@@ -1589,17 +1589,34 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         p = (p&MASK_NZ) | (0x00 if (r&0xFF) else Z) | (r&N)
         return r & 0xFF
 
-    # # JMP (JuMP)
-    # def jmp_4c_absolute():
-    #     nonlocal pc, t
-    #     # t += 3
-    #     pc = resolve_absolute(pc)
-    #     return next_op
-    # def jmp_6c_indirect():
-    #     nonlocal pc, t
-    #     # t += 5
-    #     pc = resolve_indirect(pc)
-    #     return next_op
+    # JMP (JuMP)
+    def jmp_absolute():
+        nonlocal pc, adl
+        adl = fetch(pc); pc += 1
+        return jmp_absolute_1
+    def jmp_absolute_1():
+        nonlocal pc, adh
+        adh = fetch(pc); pc += 1
+        pc = (adh<<8) | adl
+        return next_op
+    def jmp_indirect():
+        nonlocal pc, ial
+        ial = fetch(pc); pc += 1
+        return jmp_indirect_1
+    def jmp_indirect_1():
+        nonlocal pc, iah
+        iah = fetch(pc); pc += 1
+        return jmp_indirect_2
+    def jmp_indirect_2():
+        nonlocal adl
+        adl = fetch((iah<<8)|ial)
+        return jmp_indirect_3
+    def jmp_indirect_3():
+        nonlocal adh, pc
+        adh = fetch((iah<<8)|((ial+1)&0xFF)) # do not cross page
+        pc = (adh<<8) | adl
+        return next_op
+    
     # # JSR (Jump to SubRoutine)
     # def jsr_20_absolute():
     #     nonlocal pc, t, s
@@ -1713,8 +1730,8 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0xf6] = zero_page_indexed_x(inc)
     ops[0xee] = absolute(inc)
     ops[0xfe] = absolute_indexed_x_always_extra_cycle(inc)
-    # ops[0x4c] = absolute(jmp)
-    # ops[0x6c] = indirect(jmp)
+    ops[0x4c] = jmp_absolute
+    ops[0x6c] = jmp_indirect
     # ops[0x20] = absolute(jsr)
     ops[0xa9] = immediate(lda)
     ops[0xa5] = zero_page(lda)
