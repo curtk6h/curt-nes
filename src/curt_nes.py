@@ -1738,6 +1738,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         fetch(pc); pc += 1 # discard
         return next_op
 
+    # SBC (SuBtract with Carry)
+    @fetch_op
+    def sbc(data):
+        nonlocal a, p
+        r = a - data - (~p&C)
+        p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(data^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
+        a = r & 0xFF
+
     def build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -1868,14 +1876,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x7e] = absolute_indexed_x_always_extra_cycle(ror)
     ops[0x40] = rti_implied
     ops[0x60] = rts_implied
-    # ops[0xe9] = immediate(sbc)
-    # ops[0xe5] = zero_page(sbc)
-    # ops[0xf5] = zero_page_indexed_x(sbc)
-    # ops[0xed] = absolute(sbc)
-    # ops[0xfd] = absolute_indexed_x(sbc)
-    # ops[0xf9] = absolute_indexed_y(sbc)
-    # ops[0xe1] = indexed_indirect(sbc)
-    # ops[0xf1] = indirect_indexed(sbc)
+    ops[0xe9] = immediate(sbc)
+    ops[0xe5] = zero_page(sbc)
+    ops[0xf5] = zero_page_indexed_x(sbc)
+    ops[0xed] = absolute(sbc)
+    ops[0xfd] = absolute_indexed_x(sbc)
+    ops[0xf9] = absolute_indexed_y(sbc)
+    ops[0xe1] = indexed_indirect(sbc)
+    ops[0xf1] = indirect_indexed(sbc)
     # ops[0x85] = zero_page(sta)
     # ops[0x95] = zero_page_indexed_x(sta)
     # ops[0x8d] = absolute(sta)
