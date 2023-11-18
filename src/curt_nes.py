@@ -1566,7 +1566,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         p |= I
         return next_op
     # CLV (CLear oVerflow)
-    def clv():
+    def clv_implied():
         nonlocal p
         p &= MASK_V
         return next_op
@@ -1714,6 +1714,30 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         pc |= fetch(STACK_OFFSET+s) << 8
         return next_op
 
+    # RTS (ReTurn from Subroutine)
+    def rts_implied():
+        nonlocal pc
+        fetch(pc); pc += 1 # discard
+        return rts_implied_1
+    def rts_implied_1():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s+1) & 0xFF
+        return rts_implied_2
+    def rts_implied_2():
+        nonlocal pc, s
+        pc = fetch(STACK_OFFSET+s)
+        s = (s+1) & 0xFF
+        return rts_implied_3
+    def rts_implied_3():
+        nonlocal pc
+        pc |= fetch(STACK_OFFSET+s) << 8
+        return rts_implied_4
+    def rts_implied_4():
+        nonlocal pc
+        fetch(pc); pc += 1 # discard
+        return next_op
+
     def build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -1843,7 +1867,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x6e] = absolute(ror)
     ops[0x7e] = absolute_indexed_x_always_extra_cycle(ror)
     ops[0x40] = rti_implied
-    # ops[0x60] = implied(rts)
+    ops[0x60] = rts_implied
     # ops[0xe9] = immediate(sbc)
     # ops[0xe5] = zero_page(sbc)
     # ops[0xf5] = zero_page_indexed_x(sbc)
