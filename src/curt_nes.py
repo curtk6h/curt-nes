@@ -1482,21 +1482,21 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
 
     # Branch Instructions
     # BPL (Branch on PLus)
-    bpl = relative_branch(lambda: p & N)
+    bpl_implied = relative_branch(lambda: p & N)
     # BMI (Branch on MInus)
-    bmi = relative_branch(lambda:~p & N)
+    bmi_implied = relative_branch(lambda:~p & N)
     # BVS (Branch on oVerflow Set)
-    bvs = relative_branch(lambda:~p & V)
+    bvs_implied = relative_branch(lambda:~p & V)
     # BVC (Branch on oVerflow Clear)
-    bvc = relative_branch(lambda: p & V)
+    bvc_implied = relative_branch(lambda: p & V)
     # BCS (Branch on Carry Set)
-    bcs = relative_branch(lambda:~p & C)
+    bcs_implied = relative_branch(lambda:~p & C)
     # BCC (Branch on Carry Clear)
-    bcc = relative_branch(lambda: p & C)
+    bcc_implied = relative_branch(lambda: p & C)
     # BEQ (Branch on EQual)    
-    beq = relative_branch(lambda:~p & Z)
+    beq_implied = relative_branch(lambda:~p & Z)
     # BNE (Branch on Not Equal)
-    bne = relative_branch(lambda: p & Z)
+    bne_implied = relative_branch(lambda: p & Z)
 
     # BRK (BReaK)
     def brk_implied():
@@ -1546,22 +1546,22 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
 
     # Flag (Processor Status) Instructions
     # CLC (CLear Carry)
-    def clc():
+    def clc_implied():
         nonlocal p
         p &= MASK_C
         return next_op
     # SEC (SEt Carry)
-    def sec():
+    def sec_implied():
         nonlocal p
         p |= C
         return next_op
     # CLI (CLear Interrupt)
-    def cli():
+    def cli_implied():
         nonlocal p
         p &= MASK_I
         return next_op
     # SEI (SEt Interrupt)
-    def sei():
+    def sei_implied():
         nonlocal p
         p |= I
         return next_op
@@ -1571,12 +1571,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         p &= MASK_V
         return next_op
     # CLD (CLear Decimal)
-    def cld():
+    def cld_implied():
         nonlocal p
         p &= MASK_D
         return next_op
     # SED (SEt Decimal)
-    def sed():
+    def sed_implied():
         nonlocal p
         p |= D
         return next_op
@@ -1689,6 +1689,31 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ror_accumulator = modify_a_op(ror)
     ror = fetch_modify_store_op(ror)
 
+    # RTI (ReTurn from Interrupt)
+    def rti_implied():
+        nonlocal pc
+        fetch(pc); pc += 1 # discard
+        return rti_implied_1
+    def rti_implied_1():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s+1) & 0xFF
+        return rti_implied_2
+    def rti_implied_2():
+        nonlocal p, s
+        p = fetch(STACK_OFFSET+s) & MASK_B | U
+        s = (s+1) & 0xFF
+        return rti_implied_3
+    def rti_implied_3():
+        nonlocal pc, s
+        pc = fetch(STACK_OFFSET+s)
+        s = (s+1) & 0xFF
+        return rti_implied_4
+    def rti_implied_4():
+        nonlocal pc, s
+        pc |= fetch(STACK_OFFSET+s) << 8
+        return next_op
+
     def build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -1718,14 +1743,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x1e] = absolute_indexed_x_always_extra_cycle(asl)
     ops[0x24] = zero_page(bit)
     ops[0x2c] = absolute(bit)
-    ops[0x10] = bpl
-    ops[0x30] = bmi
-    ops[0x50] = bvc
-    ops[0x70] = bvs
-    ops[0x90] = bcc
-    ops[0xb0] = bcs
-    ops[0xd0] = bne
-    ops[0xf0] = beq
+    ops[0x10] = bpl_implied
+    ops[0x30] = bmi_implied
+    ops[0x50] = bvc_implied
+    ops[0x70] = bvs_implied
+    ops[0x90] = bcc_implied
+    ops[0xb0] = bcs_implied
+    ops[0xd0] = bne_implied
+    ops[0xf0] = beq_implied
     ops[0x00] = brk_implied_stop_execution if stop_on_brk else brk_implied
     ops[0xc9] = immediate(cmp)
     ops[0xc5] = zero_page(cmp)
@@ -1753,13 +1778,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x59] = absolute_indexed_y(eor)
     ops[0x41] = indexed_indirect(eor)
     ops[0x51] = indirect_indexed(eor)
-    ops[0x18] = clc
-    ops[0x38] = sec
-    ops[0x58] = cli
-    ops[0x78] = sei
-    ops[0xb8] = clv
-    ops[0xd8] = cld
-    ops[0xf8] = sed
+    ops[0x18] = clc_implied
+    ops[0x38] = sec_implied
+    ops[0x58] = cli_implied
+    ops[0x78] = sei_implied
+    ops[0xb8] = clv_implied
+    ops[0xd8] = cld_implied
+    ops[0xf8] = sed_implied
     ops[0xe6] = zero_page(inc)
     ops[0xf6] = zero_page_indexed_x(inc)
     ops[0xee] = absolute(inc)
@@ -1817,7 +1842,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x76] = zero_page_indexed_x(ror)
     ops[0x6e] = absolute(ror)
     ops[0x7e] = absolute_indexed_x_always_extra_cycle(ror)
-    # ops[0x40] = implied(rti)
+    ops[0x40] = rti_implied
     # ops[0x60] = implied(rts)
     # ops[0xe9] = immediate(sbc)
     # ops[0xe5] = zero_page(sbc)
