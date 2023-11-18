@@ -1642,18 +1642,24 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         pc = (adh<<8) | adl
         return next_op
     
-    # # JSR (Jump to SubRoutine)
-    # def jsr_20_absolute():
-    #     nonlocal pc, t, s
-    #     to = resolve_absolute(pc)
-    #     pc += 1 # 2 - 1 (offset by one before storing on stack)
-    #     store(STACK_OFFSET+s, pc>>8)
-    #     s = (s-1) & 0xFF
-    #     store(STACK_OFFSET+s, pc&0xFF)
-    #     s = (s-1) & 0xFF
-    #     # t += 6
-    #     pc = to
-    #     return next_op
+    # JSR (Jump to SubRoutine)
+    def jsr_absolute():
+        nonlocal pc, adl
+        adl = fetch(pc); pc += 1
+        return jsr_absolute_1
+    def jsr_absolute_1():
+        return jsr_absolute_2
+    def jsr_absolute_2():
+        nonlocal s
+        store(STACK_OFFSET+s, pc>>8)
+        s = (s-1) & 0xFF
+        return jsr_absolute_3
+    def jsr_absolute_3():
+        nonlocal s
+        store(STACK_OFFSET+s, pc&0xFF)
+        s = (s-1) & 0xFF
+        return jsr_absolute_4
+    jsr_absolute_4 = jmp_absolute_1
 
     # LDA (LoaD Accumulator)
     @fetch_op
@@ -1776,6 +1782,16 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     def sta():
         return a
 
+    # STX (STore X register)
+    @store_op
+    def stx():
+        return x
+
+    # STY (STore Y register)
+    @store_op
+    def sty():
+        return y
+
     def build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -1853,7 +1869,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0xfe] = absolute_indexed_x_always_extra_cycle(inc)
     ops[0x4c] = jmp_absolute
     ops[0x6c] = jmp_indirect
-    # ops[0x20] = absolute(jsr)
+    ops[0x20] = jsr_absolute
     ops[0xa9] = immediate(lda)
     ops[0xa5] = zero_page(lda)
     ops[0xb5] = zero_page_indexed_x(lda)
@@ -1927,12 +1943,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     # ops[0x68] = pla_68
     # ops[0x08] = php_08
     # ops[0x28] = plp_28
-    # ops[0x86] = zero_page(stx)
-    # ops[0x96] = zero_page_indexed_y(stx)
-    # ops[0x8e] = absolute(stx)
-    # ops[0x84] = zero_page(sty)
-    # ops[0x94] = zero_page_indexed_x(sty)
-    # ops[0x8c] = absolute(sty)
+    ops[0x86] = zero_page(stx)
+    ops[0x96] = zero_page_indexed_y(stx)
+    ops[0x8e] = absolute(stx)
+    ops[0x84] = zero_page(sty)
+    ops[0x94] = zero_page_indexed_x(sty)
+    ops[0x8c] = absolute(sty)
 
     _next_op = next_op
     def tick():
