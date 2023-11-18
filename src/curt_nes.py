@@ -1243,10 +1243,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bal = fetch(pc); pc += 1
             return zero_page_indexed_x_1
         def zero_page_indexed_x_1():
-            fetch(bal)  # discarded
+            nonlocal adl
+            adl = (bal+x) & 0xFF
             return zero_page_indexed_x_2
         def zero_page_indexed_x_2():
-            return f((bal+x)&0xFF)
+            return f(adl)
         return zero_page_indexed_x_0
     
     def zero_page_indexed_y(f):
@@ -1255,10 +1256,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bal = fetch(pc); pc += 1
             return zero_page_indexed_y_1
         def zero_page_indexed_y_1():
-            fetch(bal)  # discarded
+            nonlocal adl
+            adl = (bal+y) & 0xFF
             return zero_page_indexed_y_2
         def zero_page_indexed_y_2():
-            return f((bal+y)&0xFF)
+            return f(adl)
         return zero_page_indexed_y_0
 
     def absolute(f):
@@ -1282,12 +1284,17 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         def absolute_indexed_x_1():
             nonlocal pc, bah
             bah = fetch(pc); pc += 1
-            return absolute_indexed_x_2 if (bal+x) > 0xFF else absolute_indexed_x_3
+            return absolute_indexed_x_2
         def absolute_indexed_x_2():
-            fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
-            return absolute_indexed_x_3
+            nonlocal adl, adh
+            adl = bal + x
+            adh = (bah+(adl>>8)) & 0xFF
+            if adl & 0x100: # extra cycle for page crossing (carry on low byte addition)
+                adl &= 0xFF
+                return absolute_indexed_x_3
+            return f((adh<<8)|adl)
         def absolute_indexed_x_3():
-            return f((((bah<<8)|bal)+x)&0xFFFF)
+            return f((adh<<8)|adl)
         return absolute_indexed_x_0
     
     def absolute_indexed_x_always_extra_cycle(f):
@@ -1300,10 +1307,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bah = fetch(pc); pc += 1
             return absolute_indexed_x_2
         def absolute_indexed_x_2():
-            fetch((((bah<<8)|bal)+x)&0xFFFF)  # discarded
+            nonlocal adl, adh
+            adl = bal + x
+            adh = (bah+(adl>>8)) & 0xFF
+            adl &= 0xFF
             return absolute_indexed_x_3
         def absolute_indexed_x_3():
-            return f((((bah<<8)|bal)+x)&0xFFFF)
+            return f((adh<<8)|adl)
         return absolute_indexed_x_0
 
     def absolute_indexed_y(f):
@@ -1314,12 +1324,17 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         def absolute_indexed_y_1():
             nonlocal pc, bah
             bah = fetch(pc); pc += 1
-            return absolute_indexed_y_2 if (bal+y) > 0xFF else absolute_indexed_y_3
+            return absolute_indexed_y_2
         def absolute_indexed_y_2():
-            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-            return absolute_indexed_y_3
+            nonlocal adl, adh
+            adl = bal + y
+            adh = (bah+(adl>>8)) & 0xFF
+            if adl & 0x100: # extra cycle for page crossing (carry on low byte addition)
+                adl &= 0xFF
+                return absolute_indexed_y_3
+            return f((adh<<8)|adl)
         def absolute_indexed_y_3():
-            return f((((bah<<8)|bal)+y)&0xFFFF)
+            return f((adh<<8)|adl)
         return absolute_indexed_y_0
 
     def absolute_indexed_y_always_extra_cycle(f):
@@ -1332,10 +1347,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bah = fetch(pc); pc += 1
             return absolute_indexed_y_2
         def absolute_indexed_y_2():
-            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            nonlocal adl, adh
+            adl = bal + y
+            adh = (bah+(adl>>8)) & 0xFF
+            adl &= 0xFF
             return absolute_indexed_y_3
         def absolute_indexed_y_3():
-            return f((((bah<<8)|bal)+y)&0xFFFF)
+            return f((adh<<8)|adl)
         return absolute_indexed_y_0
 
     def indexed_indirect(f):
@@ -1344,7 +1362,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bal = fetch(pc); pc += 1
             return indexed_indirect_1
         def indexed_indirect_1():
-            fetch(bal)  # discarded
             return indexed_indirect_2
         def indexed_indirect_2():
             nonlocal adl
@@ -1370,12 +1387,17 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         def indirect_indexed_2():
             nonlocal bah
             bah = fetch((ial+1)&0xFF)
-            return indirect_indexed_3 if (bal+y) > 0xFF else indirect_indexed_4
+            return indirect_indexed_3
         def indirect_indexed_3():
-            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
-            return indirect_indexed_4
+            nonlocal adl, adh
+            adl = bal + y
+            adh = (bah+(adl>>8)) & 0xFF
+            if adl & 0x100: # extra cycle for page crossing (carry on low byte addition)
+                adl &= 0xFF
+                return indirect_indexed_4
+            return f((adh<<8)|adl)
         def indirect_indexed_4():
-            return f((((bah<<8)|bal)+y)&0xFFFF)
+            return f((adh<<8)|adl)
         return indirect_indexed_0
 
     def indirect_indexed_always_extra_cycle(f):
@@ -1392,10 +1414,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             bah = fetch((ial+1)&0xFF)
             return indirect_indexed_3
         def indirect_indexed_3():
-            fetch((((bah<<8)|bal)+y)&0xFFFF)  # discarded
+            nonlocal adl, adh
+            adl = bal + y
+            adh = (bah+(adl>>8)) & 0xFF
+            adl &= 0xFF
             return indirect_indexed_4
         def indirect_indexed_4():
-            return f((((bah<<8)|bal)+y)&0xFFFF)
+            return f((adh<<8)|adl)
         return indirect_indexed_0
 
     def relative_branch(f):   
@@ -1746,6 +1771,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         p = (p&MASK_NVZC) | (r&N) | ((((a^r)^(data^r))>>1)&V) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
         a = r & 0xFF
 
+    # STA (STore Accumulator)
+    @store_op
+    def sta():
+        return a
+
     def build_undefined_op(opcode):
         def undefined_op(pc):
             raise ValueError('Undefined opcode {}'.format(opcode))
@@ -1884,13 +1914,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0xf9] = absolute_indexed_y(sbc)
     ops[0xe1] = indexed_indirect(sbc)
     ops[0xf1] = indirect_indexed(sbc)
-    # ops[0x85] = zero_page(sta)
-    # ops[0x95] = zero_page_indexed_x(sta)
-    # ops[0x8d] = absolute(sta)
-    # ops[0x9d] = absolute_indexed_x(sta)
-    # ops[0x99] = absolute_indexed_y(sta)
-    # ops[0x81] = indexed_indirect(sta)
-    # ops[0x91] = indirect_indexed(sta)
+    ops[0x85] = zero_page(sta)
+    ops[0x95] = zero_page_indexed_x(sta)
+    ops[0x8d] = absolute(sta)
+    ops[0x9d] = absolute_indexed_x_always_extra_cycle(sta)
+    ops[0x99] = absolute_indexed_y_always_extra_cycle(sta)
+    ops[0x81] = indexed_indirect(sta)
+    ops[0x91] = indirect_indexed_always_extra_cycle(sta)
     # ops[0x9a] = txs_9a
     # ops[0xba] = tsx_ba
     # ops[0x48] = pha_48
