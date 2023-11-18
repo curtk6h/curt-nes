@@ -1702,6 +1702,56 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         a |= data
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
 
+    # Register Instructions
+    # TAX (Transfer A to X)
+    def tax_implied():
+        nonlocal x, p
+        x = a
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        return next_op
+    # TXA (Transfer X to A)
+    def txa_implied():
+        nonlocal a, p
+        a = x
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+        return next_op
+    # DEX (DEcrement X)
+    def dex_implied():
+        nonlocal x, p
+        x = (x - 1) & 0xFF
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        return next_op
+    # INX (INcrement X)
+    def inx_implied():
+        nonlocal x, p
+        x = (x + 1) & 0xFF
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        return next_op
+    # TAY (Transfer A to Y)
+    def tay_implied():
+        nonlocal y, p
+        y = a
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        return next_op
+    # TYA (Transfer Y to A)
+    def tya_implied():
+        nonlocal a, p
+        a = y
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+        return next_op
+    # DEY (DEcrement Y)
+    def dey_implied():
+        nonlocal y, p
+        y = (y - 1) & 0xFF
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        return next_op
+    # INY (INcrement Y)
+    def iny_implied():
+        nonlocal y, p
+        y = (y + 1) & 0xFF
+        p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
+        return next_op
+
     # ROL (ROtate Left)
     def rol(data):
         nonlocal p
@@ -1781,6 +1831,56 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     @store_op
     def sta():
         return a
+    
+    # Stack Instructions
+    # TXS (Transfer X to Stack ptr)
+    def txs_implied():
+        nonlocal s
+        s = x
+        return next_op
+    # TSX (Transfer Stack ptr to X)
+    def tsx_implied():
+        nonlocal x, p
+        x = s
+        p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
+        return next_op
+    # PHA (PusH Accumulator)
+    def pha_implied():
+        return pha_implied_1
+    def pha_implied_1():
+        nonlocal s
+        store(STACK_OFFSET+s, a)
+        s = (s-1) & 0xFF
+        return next_op
+    # PLA (PuLl Accumulator)
+    def pla_implied():
+        return pla_implied_1
+    def pla_implied_1():
+        return pla_implied_2
+    def pla_implied_2():
+        nonlocal s, a, p
+        s = (s+1) & 0xFF
+        a = fetch(STACK_OFFSET+s)
+        p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
+        return next_op
+    # PHP (PusH Processor status)
+    def php_implied():
+        return php_implied_1
+    def php_implied_1():
+        nonlocal s
+        store(STACK_OFFSET+s, p|B|U)
+        s = (s-1) & 0xFF
+        return next_op
+    # PLP (PuLl Processor status)
+    def plp_implied():
+        return plp_implied_1
+    def plp_implied_1():
+        return plp_implied_2
+    def plp_implied_2():
+        nonlocal s, p
+        s = (s+1) & 0xFF
+        p = fetch(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
+        return next_op
 
     # STX (STore X register)
     @store_op
@@ -1902,14 +2002,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x19] = absolute_indexed_y(ora)
     ops[0x01] = indexed_indirect(ora)
     ops[0x11] = indirect_indexed(ora)
-    # ops[0xaa] = tax_aa
-    # ops[0x8a] = txa_8a
-    # ops[0xca] = dex_ca
-    # ops[0xe8] = inx_e8
-    # ops[0xa8] = tay_a8
-    # ops[0x98] = tya_98
-    # ops[0x88] = dey_88
-    # ops[0xc8] = iny_c8
+    ops[0xaa] = tax_implied
+    ops[0x8a] = txa_implied
+    ops[0xca] = dex_implied
+    ops[0xe8] = inx_implied
+    ops[0xa8] = tay_implied
+    ops[0x98] = tya_implied
+    ops[0x88] = dey_implied
+    ops[0xc8] = iny_implied
     ops[0x2a] = rol_accumulator
     ops[0x26] = zero_page(rol)
     ops[0x36] = zero_page_indexed_x(rol)
@@ -1937,12 +2037,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
     ops[0x99] = absolute_indexed_y_always_extra_cycle(sta)
     ops[0x81] = indexed_indirect(sta)
     ops[0x91] = indirect_indexed_always_extra_cycle(sta)
-    # ops[0x9a] = txs_9a
-    # ops[0xba] = tsx_ba
-    # ops[0x48] = pha_48
-    # ops[0x68] = pla_68
-    # ops[0x08] = php_08
-    # ops[0x28] = plp_28
+    ops[0x9a] = txs_implied
+    ops[0xba] = tsx_implied
+    ops[0x48] = pha_implied
+    ops[0x68] = pla_implied
+    ops[0x08] = php_implied
+    ops[0x28] = plp_implied
     ops[0x86] = zero_page(stx)
     ops[0x96] = zero_page_indexed_y(stx)
     ops[0x8e] = absolute(stx)
