@@ -257,8 +257,7 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
             pass # prg_rom_bank_0[addr-0x8000] = value
         def write_prg_rom_bank_1(addr, value):
             pass # prg_rom_bank_1[addr-0xC000] = value
-        def write_oamdma(_, page_num):
-            cpu_transfer_page_to_oam(page_num)
+        write_oamdma = lambda _, page_num: cpu_transfer_page_to_oam(page_num)
 
         return (
             # cpu_readers
@@ -485,14 +484,12 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
         )
 
     cpu_readers, cpu_writers = create_cpu_accessors()
-    cpu_read = lambda addr: cpu_readers[addr](addr)
-    def cpu_write(addr, value):
-        cpu_writers[addr](addr, value)
+    cpu_read  = lambda addr: cpu_readers[addr](addr)
+    cpu_write = lambda addr, value: cpu_writers[addr](addr, value)
 
     ppu_readers, ppu_writers = create_ppu_accessors()
-    ppu_read = lambda addr: ppu_readers[addr](addr)
-    def ppu_write(addr, value):
-        ppu_writers[addr](addr, value)
+    ppu_read  = lambda addr: ppu_readers[addr](addr)
+    ppu_write = lambda addr, value: ppu_writers[addr](addr, value)
 
     return (
         cpu_read,
@@ -1123,7 +1120,7 @@ def create_ppu_funcs(
         )
     )
 
-def create_cpu_funcs(regs=None, stop_on_brk=False):
+def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     """
     The CPU is represented as a tuple of functions:
     (
@@ -1447,8 +1444,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
 
     def store_op(f):
         def store_op_0(addr):
-            store(addr, f())
-            return next_op
+            return store(addr, f()) or next_op
         return store_op_0
 
     def fetch_modify_store_op(f):
@@ -1462,8 +1458,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
             data = f(data)
             return fetch_modify_store_op_2
         def fetch_modify_store_op_2():
-            store(addr, data)
-            return next_op
+            return store(addr, data) or next_op
         return fetch_modify_store_op_0
     
     def modify_a_op(f):
@@ -2052,8 +2047,9 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
 
     _next_op = next_op
     def tick():
-        nonlocal _next_op
+        nonlocal t, _next_op
         _next_op = _next_op()
+        t += 1
 
     def trigger_interrupt(new_pc):
         # TODO: break out into cycles
@@ -2082,13 +2078,27 @@ def create_cpu_funcs(regs=None, stop_on_brk=False):
         return _next_op
 
     def transfer_page_to_oam(page_num):
-        # nonlocal t # TODO: break out into cycles
-        addr = page_num << 8
-        i = 0
-        while i < 0x100:
-            write_oam(fetch(addr+i))
-            i += 1
-        # t = (t+514) & ~1 # 1 wait state cycle while waiting for writes to complete, +1 if on an odd CPU cycle, then 256 alternating read/write cycles
+        nonlocal adh, adl
+        adh = page_num
+        adl = 0x00
+        return transfer_page_to_oam_wait_for_writes_to_complete
+    def transfer_page_to_oam_wait_for_writes_to_complete(): # I don't really get what "writes" this is referring to
+        if t & 1: # if current cycle is odd, next cycle will be even / read
+            return transfer_page_to_oam_read
+        return transfer_page_to_oam_sync
+    def transfer_page_to_oam_sync():
+        return transfer_page_to_oam_read
+    def transfer_page_to_oam_read():
+        nonlocal adl, data
+        data = fetch((adh<<8)|adl); adl += 1
+        return transfer_page_to_oam_write
+    def transfer_page_to_oam_write():
+        nonlocal adl
+        write_oam(data)
+        if adl <= 0xFF:
+            return transfer_page_to_oam_read
+        adl &= 0xFF
+        return next_op
     
     def connect(cpu_read, cpu_write, ppu_write_oam):
         nonlocal fetch, store, write_oam
@@ -2266,7 +2276,8 @@ class NES(object):
         self.cpu_inspect_regs = \
             create_cpu_funcs(
                 regs=cpu_regs,
-                stop_on_brk=False)
+                stop_on_brk=False,
+                t=t)
         def apu_read_reg(addr):
             return 0
         def apu_write_reg(addr, value):

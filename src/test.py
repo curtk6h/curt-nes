@@ -227,6 +227,7 @@ class TestCPU(unittest.TestCase):
     def test_cpu_transfer_page_to_oam(self):
         sample_page = [(i+100)&0xFF for i in range(0x100)]
         self._test_play(b'\x8D\x14\x40', (0x8003, 0x00, 0x03, 0x00, 0x00, 0x00), 4+514, a=0x03, ram_patches=[(0x0300, bytearray(sample_page))], expected_ppu_oam_writes=sample_page)
+        # TODO: test odd cycle
 
     def test_ppu_write_reg(self):
         self._test_play(b'\x8D\x00\x20', (0x8003, 0x00, 0xAA, 0x00, 0x00, 0x00), 4, a=0xAA, expected_ppu_writes=[(0, 0xAA)])
