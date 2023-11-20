@@ -1522,7 +1522,35 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def brk_implied():
         nonlocal p
         p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
-        return trigger_irq()
+        trigger_irq()
+        return _next_op
+    def brk_implied_1():
+        fetch(pc) # discard
+        return brk_implied_2
+    def brk_implied_2():
+        nonlocal s
+        store(STACK_OFFSET+s, pc>>8)
+        s = (s-1) & 0xFF
+        return brk_implied_3
+    def brk_implied_3():
+        nonlocal s
+        store(STACK_OFFSET+s, pc&0xFF)
+        s = (s-1) & 0xFF
+        return brk_implied_4
+    def brk_implied_4():
+        nonlocal s
+        store(STACK_OFFSET+s, p|U)
+        s = (s-1) & 0xFF
+        return brk_implied_5
+    def brk_implied_5():
+        nonlocal adl
+        adl = fetch(ial)
+        return brk_implied_6
+    def brk_implied_6():
+        nonlocal adh, pc
+        adh = fetch(iah)
+        pc = (adh<<8) | adl
+        return next_op
     def brk_implied_stop_execution():  # for unit testing / debugging
         nonlocal pc
         pc -= 1 # REMOVE ME: this is to avoid updating tests after breaking ops into cycles
@@ -2051,31 +2079,29 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         _next_op = _next_op()
         t += 1
 
-    def trigger_interrupt(new_pc):
-        # TODO: break out into cycles
+    def trigger_interrupt(new_pcl, new_pch):
+        nonlocal ial, iah
         nonlocal _next_op
-        nonlocal pc, s
-        store(STACK_OFFSET+s, pc>>8)
-        s = (s-1) & 0xFF
-        store(STACK_OFFSET+s, pc&0xFF)
-        s = (s-1) & 0xFF
-        store(STACK_OFFSET+s, p|U)
-        s = (s-1) & 0xFF
-        # t += 7
-        pc = new_pc
-        _next_op = next_op
+        ial = new_pcl
+        iah = new_pch
+        _next_op = trigger_interrupt_0
+    def trigger_interrupt_0():
+        fetch(pc) # discard
+        return brk_implied_1
 
     def trigger_nmi():
-        trigger_interrupt(fetch(0xFFFA)|(fetch(0xFFFB)<<8))
+        trigger_interrupt(0xFFFA, 0xFFFB)
 
     def trigger_reset():
-        trigger_interrupt(fetch(0xFFFC)|(fetch(0xFFFD)<<8))
+        trigger_interrupt(0xFFFC, 0xFFFD)
 
     def trigger_irq():
-        if p&I:
+        nonlocal ial, iah
+        if p & I:
             return next_op
-        trigger_interrupt(fetch(0xFFFE)|(fetch(0xFFFF)<<8))
-        return _next_op
+        ial = 0xFFFE
+        iah = 0xFFFF
+        return brk_implied_1
 
     def transfer_page_to_oam(page_num):
         nonlocal adh, adl
