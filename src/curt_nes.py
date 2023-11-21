@@ -1520,10 +1520,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
 
     # BRK (BReaK)
     def brk_implied():
-        nonlocal p
+        nonlocal p, ial, iah
         p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
-        trigger_irq()
-        return _next_op
+        if p & I:
+            return next_op
+        ial = 0xFE
+        iah = 0xFF
+        return brk_implied_1
     def brk_implied_1():
         fetch(pc) # discard
         return brk_implied_2
@@ -1544,11 +1547,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         return brk_implied_5
     def brk_implied_5():
         nonlocal adl
-        adl = fetch(ial)
+        adl = fetch(0xFF00|ial)
         return brk_implied_6
     def brk_implied_6():
         nonlocal adh, pc
-        adh = fetch(iah)
+        adh = fetch(0xFF00|iah)
         pc = (adh<<8) | adl
         return next_op
     def brk_implied_stop_execution():  # for unit testing / debugging
@@ -2078,6 +2081,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal t, _next_op
         _next_op = _next_op()
         t += 1
+    def debug_tick():  # REMOVE ME
+        nonlocal t, _next_op
+        start_of_op = _next_op is next_op
+        _next_op = _next_op()
+        t += 1
+        return start_of_op
 
     def trigger_interrupt(new_pcl, new_pch):
         nonlocal ial, iah
@@ -2090,18 +2099,15 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         return brk_implied_1
 
     def trigger_nmi():
-        trigger_interrupt(0xFFFA, 0xFFFB)
+        trigger_interrupt(0xFA, 0xFB)
 
     def trigger_reset():
-        trigger_interrupt(0xFFFC, 0xFFFD)
+        trigger_interrupt(0xFC, 0xFD)
 
     def trigger_irq():
-        nonlocal ial, iah
         if p & I:
-            return next_op
-        ial = 0xFFFE
-        iah = 0xFFFF
-        return brk_implied_1
+            return
+        trigger_interrupt(0xFE, 0xFF)
 
     def transfer_page_to_oam(page_num):
         nonlocal adh, adl
@@ -2133,7 +2139,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         write_oam = ppu_write_oam
 
     return (
-        tick,
+        debug_tick,
         trigger_nmi,
         trigger_reset,
         trigger_irq,
@@ -2350,8 +2356,8 @@ class NES(object):
                     log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
                     log_line += ' ' * (48-len(log_line))
                     log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                    print(log_line)
-                    self.cpu_tick()
+                    if self.cpu_tick():
+                        print(log_line)
                     t += 1
             else:
                 frame_duration = int(113.667*262)
@@ -2359,28 +2365,27 @@ class NES(object):
                 self.cpu_trigger_reset()
                 pygame.event.clear()
                 while not pygame.event.get(eventtype=pygame.QUIT):
-                    # if t <= 29658:
-                    #   self.cpu_tick(); ppu_t += 1; t += 1
-                    # else:
-                    if True:
-                        self.cpu_tick()
-                        t += 1
-                        # pc, s, a, x, y, p = self.cpu_inspect_regs()
-                        # op = self.cpu_read(pc)
-                        # num_operands = INSTRUCTION_BYTES[op]
-                        # operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
-                        # operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
-                        # addr_mode = INSTRUCTION_ADDR_MODES[op]
-                        # addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                        # log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
-                        # log_line += ' ' * (48-len(log_line))
-                        # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                        # print(log_line)
-                        while ppu_t < t:
-                            self.ppu_tick()
-                            self.ppu_tick()
-                            self.ppu_tick()
-                            ppu_t += 1
+                    if t <= 29658:
+                        self.cpu_tick(); t += 1
+                        ppu_t += 3
+                    else: # if True:
+                        pc, s, a, x, y, p = self.cpu_inspect_regs()
+                        op = self.cpu_read(pc)
+                        num_operands = INSTRUCTION_BYTES[op]
+                        operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                        operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                        addr_mode = INSTRUCTION_ADDR_MODES[op]
+                        addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                        log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
+                        log_line += ' ' * (48-len(log_line))
+                        log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
+                        print(log_line)
+                        
+                        self.ppu_tick(); ppu_t += 1
+                        self.cpu_tick(); t += 1
+                        self.ppu_tick(); ppu_t += 1
+                        self.ppu_tick(); ppu_t += 1
+
                         if (t - frame_start) >= frame_duration:
                             with pygame.PixelArray(screen) as screen_pixels:
                                 for y in range(262):
