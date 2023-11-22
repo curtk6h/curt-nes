@@ -1124,8 +1124,8 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     The CPU is represented as a tuple of functions:
     (
         tick,
+        reset,
         trigger_nmi,
-        trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
         connect,
@@ -2120,8 +2120,8 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
 
     return (
         debug_tick,
+        reset,
         trigger_nmi,
-        trigger_reset,
         trigger_irq,
         transfer_page_to_oam,
         connect,
@@ -2294,8 +2294,8 @@ class NES(object):
         self.ppu_inspect_regs = \
             create_ppu_funcs(self.out_pixels)
         self.cpu_tick,\
+        self.cpu_reset,\
         self.cpu_trigger_nmi,\
-        self.cpu_trigger_reset,\
         self.cpu_trigger_irq,\
         self.cpu_transfer_page_to_oam,\
         self.cpu_connect,\
@@ -2356,7 +2356,7 @@ class NES(object):
             else:
                 frame_duration = int(113.667*262)
                 frame_start = t
-                self.cpu_trigger_reset()
+                self.cpu_reset()
                 pygame.event.clear()
                 while not pygame.event.get(eventtype=pygame.QUIT):
                     if t <= 29658:

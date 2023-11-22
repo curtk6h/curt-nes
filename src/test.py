@@ -145,7 +145,7 @@ class TestCPU(unittest.TestCase):
             self.apu_writes.append((addr, value))
 
         cpu_funcs = create_cpu_funcs(regs=regs, stop_on_brk=True)
-        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_inspect_regs = cpu_funcs
+        cpu_tick, cpu_reset, cpu_trigger_nmi, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_inspect_regs = cpu_funcs
         cpu_read, cpu_write, ppu_read, ppu_write = mapper_funcs = create_default_mapper_funcs(
             self.ram,
             self.vram,
@@ -166,7 +166,7 @@ class TestCPU(unittest.TestCase):
 
     def _test_play(self, prg_rom, expected_regs, expected_t, pc=0x8000, s=0x00, a=0x00, x=0x00, y=0x00, p=0x00, ram_patches=[], expected_ram_patches=[], prg_rom_patches=[], expected_prg_rom_patches=[], expected_ppu_reads=[], expected_ppu_writes=[], expected_ppu_oam_writes=[]):
         mapper_funcs, cpu_funcs = self._build_mapper_and_cpu(prg_rom, (pc, s, a, x, y, p))
-        cpu_tick, cpu_trigger_nmi, cpu_trigger_reset, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_insepect_regs = cpu_funcs
+        cpu_tick, cpu_reset, cpu_trigger_nmi, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_insepect_regs = cpu_funcs
 
         def cpu_tick_forever():
             t = 0
