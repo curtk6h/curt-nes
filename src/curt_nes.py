@@ -1119,7 +1119,7 @@ def create_ppu_funcs(
         )
     )
 
-def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
+def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0):
     """
     The CPU is represented as a tuple of functions:
     (
@@ -1139,8 +1139,8 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     #       pch/pcl, due to how often it gets incremented
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
 
-    # Instruction "register"
-    ir   = None
+    # Instruction "registers"
+    ir   = next_ir = None
 
     # Internal registers that support addressing
     adh  = 0x00
@@ -1164,7 +1164,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal pc
         opcode = fetch(pc); pc += 1
         return ops[opcode]
-    ir = next_ir = fetch_op
     
     def immediate(f):
         def immediate_0():
@@ -1474,6 +1473,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         iah = 0xFF
         return brk_implied_1
     def brk_implied_1():
+        nonlocal pc
         fetch(pc); pc += 1 # discard
         return brk_implied_2
     def brk_implied_2():
@@ -2036,6 +2036,35 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         t += 1
         return start_of_op
 
+    def reset():
+        nonlocal ial, iah, next_ir
+        ial = 0xFC
+        iah = 0xFD
+        next_ir = reset_0
+    def reset_0():
+        nonlocal next_ir
+        next_ir = fetch_op # reset next_ir to normal execution
+        fetch(pc) # discard
+        return reset_1
+    def reset_1():
+        fetch(pc) # discard
+        return reset_2
+    def reset_2():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return reset_3
+    def reset_3():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return reset_4
+    def reset_4():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return brk_implied_5
+
     def interrupt(new_pcl, new_pch):
         nonlocal ial, iah
         nonlocal next_ir
@@ -2057,37 +2086,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def trigger_irq():
         if not (p&I):
             interrupt(0xFE, 0xFF)
-
-    def reset():
-        # FIXME: for now just go there! (stack pushes don't happen in real life)
-        nonlocal ial, iah
-        nonlocal next_ir
-        ial = 0xFC
-        iah = 0xFD
-        next_ir = reset_0
-    def reset_0():
-        nonlocal next_ir
-        next_ir = fetch_op # reset next_ir to normal execution
-        fetch(pc) # discard
-        return reset_1
-    def reset_1():
-        fetch(pc) # discard
-        return reset_2
-    def reset_2():
-        nonlocal s
-        store(STACK_OFFSET+s) # discard
-        s = (s-1) & 0xFF
-        return reset_3
-    def reset_3():
-        nonlocal s
-        store(STACK_OFFSET+s) # discard
-        s = (s-1) & 0xFF
-        return reset_4
-    def reset_4():
-        nonlocal s
-        fetch(STACK_OFFSET+s) # discard
-        s = (s-1) & 0xFF
-        return brk_implied_5
 
     def transfer_page_to_oam(page_num):
         nonlocal adh, adl
@@ -2117,6 +2115,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         fetch = cpu_read
         store = cpu_write
         write_oam = ppu_write_oam
+
+    if skip_initial_reset:
+        next_ir = fetch_op
+    else:
+        reset()
+    ir = next_ir
 
     return (
         debug_tick,
@@ -2356,7 +2360,6 @@ class NES(object):
             else:
                 frame_duration = int(113.667*262)
                 frame_start = t
-                self.cpu_reset()
                 pygame.event.clear()
                 while not pygame.event.get(eventtype=pygame.QUIT):
                     if t <= 29658:

@@ -144,7 +144,7 @@ class TestCPU(unittest.TestCase):
         def apu_write_reg(addr, value):
             self.apu_writes.append((addr, value))
 
-        cpu_funcs = create_cpu_funcs(regs=regs, stop_on_brk=True)
+        cpu_funcs = create_cpu_funcs(regs=regs, stop_on_brk=True, skip_initial_reset=True)
         cpu_tick, cpu_reset, cpu_trigger_nmi, cpu_trigger_irq, cpu_transfer_page_to_oam, cpu_connect, cpu_inspect_regs = cpu_funcs
         cpu_read, cpu_write, ppu_read, ppu_write = mapper_funcs = create_default_mapper_funcs(
             self.ram,
