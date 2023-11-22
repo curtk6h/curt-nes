@@ -1160,11 +1160,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
 
     # Addressing modes
 
-    def _next_op():
+    def fetch_op():
         nonlocal pc
         opcode = fetch(pc); pc += 1
         return ops[opcode]
-    ir = next_op = _next_op
+    ir = next_ir = fetch_op
     
     def immediate(f):
         def immediate_0():
@@ -1372,54 +1372,54 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         def relative_branch_0():
             nonlocal pc, off
             off = signed8(fetch(pc)); pc += 1
-            return next_op if f() else relative_branch_1
+            return next_ir if f() else relative_branch_1
         def relative_branch_1():
             nonlocal pc, off
             off += pc & 0xFF # remember this is signed!
             pc ^= (pc^off) & 0xFF
-            return relative_branch_2 if off & 0x100 else next_op
+            return relative_branch_2 if off & 0x100 else next_ir
         def relative_branch_2():
             nonlocal pc
             pc += off & ~0xFF # add carry (may be negative)
-            return next_op
+            return next_ir
         return relative_branch_0
 
-    def fetch_op(f):
-        def fetch_op_0(addr):
+    def read_op(f):
+        def read_op_0(addr):
             f(fetch(addr))
-            return next_op
-        return fetch_op_0
+            return next_ir
+        return read_op_0
 
-    def store_op(f):
-        def store_op_0(addr):
-            return store(addr, f()) or next_op
-        return store_op_0
+    def write_op(f):
+        def write_op_0(addr):
+            return store(addr, f()) or next_ir
+        return write_op_0
 
-    def fetch_modify_store_op(f):
-        def fetch_modify_store_op_0(_addr):
+    def read_write_op(f):
+        def read_write_op_0(_addr):
             nonlocal addr, data
             addr = _addr
             data = fetch(addr)
-            return fetch_modify_store_op_1
-        def fetch_modify_store_op_1():
+            return read_write_op_1
+        def read_write_op_1():
             nonlocal data
             data = f(data)
-            return fetch_modify_store_op_2
-        def fetch_modify_store_op_2():
-            return store(addr, data) or next_op
-        return fetch_modify_store_op_0
+            return read_write_op_2
+        def read_write_op_2():
+            return store(addr, data) or next_ir
+        return read_write_op_0
     
     def modify_a_op(f):
         def modify_a_op_0():
             nonlocal a
             a = f(a)
-            return next_op
+            return next_ir
         return modify_a_op_0
 
     # Instructions
 
     # ADC (ADd with Carry)
-    @fetch_op
+    @read_op
     def adc(data):
         nonlocal a, p
         r = data + a + (p&C)
@@ -1427,7 +1427,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         a = r & 0xFF
 
     # AND (bitwise AND with accumulator)
-    @fetch_op
+    @read_op
     def and_(data):
         nonlocal a, p
         a &= data
@@ -1440,10 +1440,10 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         return r & 0xFF
     asl_accumulator = modify_a_op(asl)
-    asl = fetch_modify_store_op(asl)
+    asl = read_write_op(asl)
 
     # BIT (test BITs)
-    @fetch_op
+    @read_op
     def bit(data):
         nonlocal p
         p = (p&MASK_NVZ) | (data & N) | (data & V) | (0x00 if (data&a) else Z)
@@ -1500,35 +1500,35 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal adh, pc
         adh = fetch(0xFF00|iah)
         pc = (adh<<8) | adl
-        return next_op
+        return next_ir
     def brk_implied_stop_execution():  # for unit testing / debugging
         nonlocal pc
         pc -= 1 # REMOVE ME: this is to avoid updating tests after breaking ops into cycles
         raise VMStop()
     
     # CMP (CoMPare accumulator)
-    @fetch_op
+    @read_op
     def cmp(data):
         nonlocal p
         r = a - data
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
 
     # CPX (ComPare X register)
-    @fetch_op
+    @read_op
     def cpx(data):
         nonlocal p
         r = x - data
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
 
     # CPY (ComPare Y register)
-    @fetch_op
+    @read_op
     def cpy(data):
         nonlocal p
         r = y - data
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | (~(r>>8)&C)
 
     # DEC (DECrement memory)
-    @fetch_modify_store_op
+    @read_write_op
     def dec(data):
         nonlocal p
         r = data - 1
@@ -1536,7 +1536,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         return r & 0xFF
 
     # EOR (bitwise Exclusive OR)
-    @fetch_op
+    @read_op
     def eor(data):
         nonlocal a, p
         a ^= data
@@ -1547,40 +1547,40 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def clc_implied():
         nonlocal p
         p &= MASK_C
-        return next_op
+        return next_ir
     # SEC (SEt Carry)
     def sec_implied():
         nonlocal p
         p |= C
-        return next_op
+        return next_ir
     # CLI (CLear Interrupt)
     def cli_implied():
         nonlocal p
         p &= MASK_I
-        return next_op
+        return next_ir
     # SEI (SEt Interrupt)
     def sei_implied():
         nonlocal p
         p |= I
-        return next_op
+        return next_ir
     # CLV (CLear oVerflow)
     def clv_implied():
         nonlocal p
         p &= MASK_V
-        return next_op
+        return next_ir
     # CLD (CLear Decimal)
     def cld_implied():
         nonlocal p
         p &= MASK_D
-        return next_op
+        return next_ir
     # SED (SEt Decimal)
     def sed_implied():
         nonlocal p
         p |= D
-        return next_op
+        return next_ir
     
     # INC (INCrement memory)
-    @fetch_modify_store_op
+    @read_write_op
     def inc(data):
         nonlocal p
         r = data + 1
@@ -1596,7 +1596,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal pc, adh
         adh = fetch(pc); pc += 1
         pc = (adh<<8) | adl
-        return next_op
+        return next_ir
     def jmp_indirect():
         nonlocal pc, ial
         ial = fetch(pc); pc += 1
@@ -1613,7 +1613,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal adh, pc
         adh = fetch((iah<<8)|((ial+1)&0xFF)) # do not cross page
         pc = (adh<<8) | adl
-        return next_op
+        return next_ir
     
     # JSR (Jump to SubRoutine)
     def jsr_absolute():
@@ -1635,21 +1635,21 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     jsr_absolute_4 = jmp_absolute_1
 
     # LDA (LoaD Accumulator)
-    @fetch_op
+    @read_op
     def lda(data):
         nonlocal a, p
         a = data
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
 
     # LDX (LoaD X register)
-    @fetch_op
+    @read_op
     def ldx(data):
         nonlocal x, p
         x = data
         p = (p&MASK_NZ) | (0x00 if x else Z) | (x&N)
 
     # LDY (LoaD Y register)
-    @fetch_op
+    @read_op
     def ldy(data):
         nonlocal y, p
         y = data
@@ -1662,14 +1662,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (data&C)
         return r
     lsr_accumulator = modify_a_op(lsr)
-    lsr = fetch_modify_store_op(lsr)
+    lsr = read_write_op(lsr)
 
     # NOP (No OPeration)
     def nop_implied():
-        return next_op
+        return next_ir
 
     # ORA (bitwise OR with Accumulator)
-    @fetch_op
+    @read_op
     def ora(data):
         nonlocal a, p
         a |= data
@@ -1681,49 +1681,49 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal x, p
         x = a
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
-        return next_op
+        return next_ir
     # TXA (Transfer X to A)
     def txa_implied():
         nonlocal a, p
         a = x
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+        return next_ir
     # DEX (DEcrement X)
     def dex_implied():
         nonlocal x, p
         x = (x - 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
-        return next_op
+        return next_ir
     # INX (INcrement X)
     def inx_implied():
         nonlocal x, p
         x = (x + 1) & 0xFF
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
-        return next_op
+        return next_ir
     # TAY (Transfer A to Y)
     def tay_implied():
         nonlocal y, p
         y = a
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
-        return next_op
+        return next_ir
     # TYA (Transfer Y to A)
     def tya_implied():
         nonlocal a, p
         a = y
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+        return next_ir
     # DEY (DEcrement Y)
     def dey_implied():
         nonlocal y, p
         y = (y - 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
-        return next_op
+        return next_ir
     # INY (INcrement Y)
     def iny_implied():
         nonlocal y, p
         y = (y + 1) & 0xFF
         p = (p&MASK_NZ) | (y&N) | (0x00 if y else Z)
-        return next_op
+        return next_ir
 
     # ROL (ROtate Left)
     def rol(data):
@@ -1732,7 +1732,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         p = (p&MASK_NZC) | (r&N) | (0x00 if (r&0xFF) else Z) | ((r>>8)&C)
         return r & 0xFF
     rol_accumulator = modify_a_op(rol)
-    rol = fetch_modify_store_op(rol)
+    rol = read_write_op(rol)
 
     # ROR (ROtate Right)
     def ror(data):
@@ -1741,7 +1741,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         p = (p&MASK_NZC) | (r&N) | (0x00 if r else Z) | (data&C)
         return r & 0xFF
     ror_accumulator = modify_a_op(ror)
-    ror = fetch_modify_store_op(ror)
+    ror = read_write_op(ror)
 
     # RTI (ReTurn from Interrupt)
     def rti_implied():
@@ -1766,7 +1766,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def rti_implied_4():
         nonlocal pc
         pc |= fetch(STACK_OFFSET+s) << 8
-        return next_op
+        return next_ir
 
     # RTS (ReTurn from Subroutine)
     def rts_implied():
@@ -1790,10 +1790,10 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def rts_implied_4():
         nonlocal pc
         fetch(pc); pc += 1 # discard
-        return next_op
+        return next_ir
 
     # SBC (SuBtract with Carry)
-    @fetch_op
+    @read_op
     def sbc(data):
         nonlocal a, p
         r = a - data - (~p&C)
@@ -1801,7 +1801,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         a = r & 0xFF
 
     # STA (STore Accumulator)
-    @store_op
+    @write_op
     def sta():
         return a
     
@@ -1810,13 +1810,13 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def txs_implied():
         nonlocal s
         s = x
-        return next_op
+        return next_ir
     # TSX (Transfer Stack ptr to X)
     def tsx_implied():
         nonlocal x, p
         x = s
         p = (p&MASK_NZ) | (x&N) | (0x00 if x else Z)
-        return next_op
+        return next_ir
     # PHA (PusH Accumulator)
     def pha_implied():
         return pha_implied_1
@@ -1824,7 +1824,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal s
         store(STACK_OFFSET+s, a)
         s = (s-1) & 0xFF
-        return next_op
+        return next_ir
     # PLA (PuLl Accumulator)
     def pla_implied():
         return pla_implied_1
@@ -1836,7 +1836,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal a, p
         a = fetch(STACK_OFFSET+s)
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
-        return next_op
+        return next_ir
     # PHP (PusH Processor status)
     def php_implied():
         return php_implied_1
@@ -1844,7 +1844,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal s
         store(STACK_OFFSET+s, p|B|U)
         s = (s-1) & 0xFF
-        return next_op
+        return next_ir
     # PLP (PuLl Processor status)
     def plp_implied():
         return plp_implied_1
@@ -1855,15 +1855,15 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def plp_implied_2():
         nonlocal p
         p = fetch(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
-        return next_op
+        return next_ir
 
     # STX (STore X register)
-    @store_op
+    @write_op
     def stx():
         return x
 
     # STY (STore Y register)
-    @store_op
+    @write_op
     def sty():
         return y
 
@@ -2031,39 +2031,43 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         t += 1
     def debug_tick():  # REMOVE ME
         nonlocal t, ir
-        start_of_op = ir is next_op
+        start_of_op = ir is next_ir
         ir = ir()
         t += 1
         return start_of_op
 
-    def trigger_interrupt(new_pcl, new_pch):
+    def interrupt(new_pcl, new_pch):
         nonlocal ial, iah
-        nonlocal next_op
+        nonlocal next_ir
         ial = new_pcl
         iah = new_pch
-        next_op = trigger_interrupt_0
-    def trigger_interrupt_0():
-        nonlocal next_op
-        next_op = _next_op # reset next_op to normal execution
+        next_ir = interrupt_0
+    def interrupt_0():
+        nonlocal next_ir
+        next_ir = fetch_op # reset next_ir to normal execution
         fetch(pc) # discard
-        return trigger_interrupt_1
-    def trigger_interrupt_1():
+        return interrupt_1
+    def interrupt_1():
         fetch(pc) # discard
         return brk_implied_2
 
     def trigger_nmi():
-        trigger_interrupt(0xFA, 0xFB)
+        interrupt(0xFA, 0xFB)
+
+    def trigger_irq():
+        if not (p&I):
+            interrupt(0xFE, 0xFF)
 
     def reset():
         # FIXME: for now just go there! (stack pushes don't happen in real life)
         nonlocal ial, iah
-        nonlocal next_op
+        nonlocal next_ir
         ial = 0xFC
         iah = 0xFD
-        next_op = reset_0
+        next_ir = reset_0
     def reset_0():
-        nonlocal next_op
-        next_op = _next_op # reset next_op to normal execution
+        nonlocal next_ir
+        next_ir = fetch_op # reset next_ir to normal execution
         fetch(pc) # discard
         return reset_1
     def reset_1():
@@ -2084,10 +2088,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         fetch(STACK_OFFSET+s) # discard
         s = (s-1) & 0xFF
         return brk_implied_5
-
-    def trigger_irq():
-        if not (p&I):
-            trigger_interrupt(0xFE, 0xFF)
 
     def transfer_page_to_oam(page_num):
         nonlocal adh, adl
@@ -2110,7 +2110,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         if adl <= 0xFF:
             return transfer_page_to_oam_read
         adl &= 0xFF
-        return next_op
+        return next_ir
     
     def connect(cpu_read, cpu_write, ppu_write_oam):
         nonlocal fetch, store, write_oam
