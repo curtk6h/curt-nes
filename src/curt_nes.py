@@ -1139,6 +1139,9 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     #       pch/pcl, due to how often it gets incremented
     pc, s, a, x, y, p = regs or (0x0000, 0xFF, 0x00, 0x00, 0x00, 0x34)
 
+    # Instruction "register"
+    ir   = None
+
     # Internal registers that support addressing
     adh  = 0x00
     adl  = 0x00
@@ -1154,61 +1157,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     
     # NOTE: also consider all flag single letter names reserved,
     #       even if not currently used: c, z, i, d, b, v, n
-    
-    # # Resolve address per mode
-    # def resolve_immediate(pc):
-    #     return pc
-    # def resolve_zero_page(pc):
-    #     return fetch(pc)
-    # def resolve_zero_page_indexed_x(pc):
-    #     return (addr+x) & 0xFF
-    # def resolve_zero_page_indexed_y(pc):
-    #     return (addr+y) & 0xFF
-    # def resolve_absolute_0(pc):
-    #     return fetch(pc)
-    # def resolve_absolute_1(pc):
-    #     return addr | (fetch(pc)<<8)
-    # def resolve_absolute_indexed_x_0(pc):
-    #     return fetch(pc) + x
-    # def resolve_absolute_indexed_x_1(pc):
-    #     return addr
-    #     t += addr>>8
-    #     return (addr+(fetch(pc+1)<<8)) & 0xFFFF
-    # def resolve_absolute_indexed_x_2(pc):
-    #     nonlocal t
-    #     addr = fetch(pc) + x
-    #     t += addr>>8
-    #     return (addr+(fetch(pc+1)<<8)) & 0xFFFF
-    # def resolve_absolute_indexed_y(pc):
-    #     nonlocal t
-    #     addr = fetch(pc) + y
-    #     t += addr>>8
-    #     return (addr+(fetch(pc+1)<<8)) & 0xFFFF
-    # def resolve_absolute_indexed_x_no_extra_cycle(pc):
-    #     return ((fetch(pc)|(fetch(pc+1)<<8))+x) & 0xFFFF
-    # def resolve_absolute_indexed_y_no_extra_cycle(pc):
-    #     return ((fetch(pc)|(fetch(pc+1)<<8))+y) & 0xFFFF
-    # def resolve_indexed_indirect(pc):
-    #     i = fetch(pc) + x
-    #     return fetch(i&0xFF)|(fetch((i+1)&0xFF)<<8)
-    # def resolve_indirect_indexed(pc):
-    #     nonlocal t
-    #     i = fetch(pc)
-    #     addr = fetch(i) + y
-    #     t += addr>>8
-    #     return (addr+(fetch((i+1)&0xFF)<<8)) & 0xFFFF
-    # def resolve_indirect_indexed_no_extra_cycle(pc):
-    #     i = fetch(pc)
-    #     return ((fetch(i)|(fetch((i+1)&0xFF)<<8))+y) & 0xFFFF
-    # def resolve_indirect(pc):
-    #     addr = fetch(pc) | (fetch(pc+1)<<8)
-    #     return fetch(addr) | (fetch((addr&0xFF00)|((addr+1)&0xFF))<<8)  # NOTE: byte two cannot cross page
-    # def resolve_relative(pc):
-    #     nonlocal t
-    #     rel_addr = signed8(fetch(pc))
-    #     pc += 1
-    #     t += (((pc&0xFF)+rel_addr)>>8) & 1
-    #     return pc + rel_addr
 
     # Addressing modes
 
@@ -1216,7 +1164,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         nonlocal pc
         opcode = fetch(pc); pc += 1
         return ops[opcode]
-    next_op = _next_op
+    ir = next_op = _next_op
     
     def immediate(f):
         def immediate_0():
@@ -2077,16 +2025,14 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     ops[0x94] = zero_page_indexed_x(sty)
     ops[0x8c] = absolute(sty)
 
-    op = next_op # op "register"
-
     def tick():
-        nonlocal t, op
-        op = op()
+        nonlocal t, ir
+        ir = ir()
         t += 1
     def debug_tick():  # REMOVE ME
-        nonlocal t, op
-        start_of_op = op is next_op
-        op = op()
+        nonlocal t, ir
+        start_of_op = ir is next_op
+        ir = ir()
         t += 1
         return start_of_op
 
@@ -2098,7 +2044,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         next_op = trigger_interrupt_0
     def trigger_interrupt_0():
         nonlocal next_op
-        next_op = _next_op
+        next_op = _next_op # reset next_op to normal execution
         fetch(pc) # discard
         return trigger_interrupt_1
     def trigger_interrupt_1():
@@ -2108,10 +2054,36 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def trigger_nmi():
         trigger_interrupt(0xFA, 0xFB)
 
-    def trigger_reset():
+    def reset():
         # FIXME: for now just go there! (stack pushes don't happen in real life)
-        nonlocal pc
-        pc = (fetch(0xFFFD)<<8)|(fetch(0xFFFC))
+        nonlocal ial, iah
+        nonlocal next_op
+        ial = 0xFC
+        iah = 0xFD
+        next_op = reset_0
+    def reset_0():
+        nonlocal next_op
+        next_op = _next_op # reset next_op to normal execution
+        fetch(pc) # discard
+        return reset_1
+    def reset_1():
+        fetch(pc) # discard
+        return reset_2
+    def reset_2():
+        nonlocal s
+        store(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return reset_3
+    def reset_3():
+        nonlocal s
+        store(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return reset_4
+    def reset_4():
+        nonlocal s
+        fetch(STACK_OFFSET+s) # discard
+        s = (s-1) & 0xFF
+        return brk_implied_5
 
     def trigger_irq():
         if not (p&I):
