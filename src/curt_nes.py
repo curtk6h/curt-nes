@@ -97,7 +97,7 @@ INSTRUCTION_LABELS = [
 ]
 
 INSTRUCTION_BYTES = [
-    1, 2, 0, 0, 0, 2, 2, 0, 1, 2, 1, 0, 0, 3, 3, 0,
+    2, 2, 0, 0, 0, 2, 2, 0, 1, 2, 1, 0, 0, 3, 3, 0,
     2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
     3, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
     2, 2, 0, 0, 0, 2, 2, 0, 1, 3, 0, 0, 0, 3, 3, 0,
@@ -153,7 +153,8 @@ ADDR_MODE_FORMATS = [
     lambda cpu_read, pc, operands: '',
     lambda cpu_read, pc, operands: ' #${:02X}'   .format(operands[1]),
     lambda cpu_read, pc, operands: ' A',
-    lambda cpu_read, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], cpu_read(operands[1])),
+    # lambda cpu_read, pc, operands: ' ${:02X} = {:02X}'.format(operands[1], cpu_read(operands[1])),
+    lambda cpu_read, pc, operands: ' ${:02X}'    .format(operands[1]),
     lambda cpu_read, pc, operands: ' ${:02X},X'  .format(operands[1]),
     lambda cpu_read, pc, operands: ' ${:02X},Y'  .format(operands[1]),
     lambda cpu_read, pc, operands: ' ${:04X}'    .format(operands[1]|(operands[2]<<8)),
@@ -629,14 +630,12 @@ def create_ppu_funcs(
 
     def set_vblank_flag():
         nonlocal ppu_status
-        print(f"calling nmi at {t}")
         ppu_status |= 0x80
         if ppu_ctrl & 0x80:
             trigger_nmi()
 
     def clear_flags():
         nonlocal ppu_status
-        print(f"clearing ppu flags at {t}")
         ppu_status &= 0x1F
 
     def fetch_sp_0():
@@ -1213,10 +1212,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
 
     # Addressing modes
 
-    def next_op():
+    def _next_op():
         nonlocal pc
         opcode = fetch(pc); pc += 1
         return ops[opcode]
+    next_op = _next_op
     
     def immediate(f):
         def immediate_0():
@@ -1521,14 +1521,12 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     # BRK (BReaK)
     def brk_implied():
         nonlocal p, ial, iah
-        p |= B  # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
-        if p & I:
-            return next_op
+        p |= B # NOTE: B flag won't be reset after nested interrupt (via PHP) -- is this okay?
         ial = 0xFE
         iah = 0xFF
         return brk_implied_1
     def brk_implied_1():
-        fetch(pc) # discard
+        fetch(pc); pc += 1 # discard
         return brk_implied_2
     def brk_implied_2():
         nonlocal s
@@ -1546,8 +1544,9 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         s = (s-1) & 0xFF
         return brk_implied_5
     def brk_implied_5():
-        nonlocal adl
+        nonlocal adl, p
         adl = fetch(0xFF00|ial)
+        p |= I
         return brk_implied_6
     def brk_implied_6():
         nonlocal adh, pc
@@ -1799,7 +1798,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     # RTI (ReTurn from Interrupt)
     def rti_implied():
         nonlocal pc
-        fetch(pc); pc += 1 # discard
+        fetch(pc) # discard
         return rti_implied_1
     def rti_implied_1():
         nonlocal s
@@ -1817,7 +1816,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         s = (s+1) & 0xFF
         return rti_implied_4
     def rti_implied_4():
-        nonlocal pc, s
+        nonlocal pc
         pc |= fetch(STACK_OFFSET+s) << 8
         return next_op
 
@@ -1882,10 +1881,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def pla_implied():
         return pla_implied_1
     def pla_implied_1():
+        nonlocal s
+        s = (s+1) & 0xFF
         return pla_implied_2
     def pla_implied_2():
-        nonlocal s, a, p
-        s = (s+1) & 0xFF
+        nonlocal a, p
         a = fetch(STACK_OFFSET+s)
         p = (p&MASK_NZ) | (a&N) | (0x00 if a else Z)
         return next_op
@@ -1901,10 +1901,11 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     def plp_implied():
         return plp_implied_1
     def plp_implied_1():
+        nonlocal s
+        s = (s+1) & 0xFF
         return plp_implied_2
     def plp_implied_2():
-        nonlocal s, p
-        s = (s+1) & 0xFF
+        nonlocal p
         p = fetch(STACK_OFFSET+s) & MASK_B | U  # always clear break bit, set unused bit 
         return next_op
 
@@ -1919,7 +1920,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
         return y
 
     def build_undefined_op(opcode):
-        def undefined_op(pc):
+        def undefined_op():
             raise ValueError('Undefined opcode {}'.format(opcode))
         return undefined_op
 
@@ -2076,38 +2077,45 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, t=0):
     ops[0x94] = zero_page_indexed_x(sty)
     ops[0x8c] = absolute(sty)
 
-    _next_op = next_op
+    op = next_op # op "register"
+
     def tick():
-        nonlocal t, _next_op
-        _next_op = _next_op()
+        nonlocal t, op
+        op = op()
         t += 1
     def debug_tick():  # REMOVE ME
-        nonlocal t, _next_op
-        start_of_op = _next_op is next_op
-        _next_op = _next_op()
+        nonlocal t, op
+        start_of_op = op is next_op
+        op = op()
         t += 1
         return start_of_op
 
     def trigger_interrupt(new_pcl, new_pch):
         nonlocal ial, iah
-        nonlocal _next_op
+        nonlocal next_op
         ial = new_pcl
         iah = new_pch
-        _next_op = trigger_interrupt_0
+        next_op = trigger_interrupt_0
     def trigger_interrupt_0():
+        nonlocal next_op
+        next_op = _next_op
         fetch(pc) # discard
-        return brk_implied_1
+        return trigger_interrupt_1
+    def trigger_interrupt_1():
+        fetch(pc) # discard
+        return brk_implied_2
 
     def trigger_nmi():
         trigger_interrupt(0xFA, 0xFB)
 
     def trigger_reset():
-        trigger_interrupt(0xFC, 0xFD)
+        # FIXME: for now just go there! (stack pushes don't happen in real life)
+        nonlocal pc
+        pc = (fetch(0xFFFD)<<8)|(fetch(0xFFFC))
 
     def trigger_irq():
-        if p & I:
-            return
-        trigger_interrupt(0xFE, 0xFF)
+        if not (p&I):
+            trigger_interrupt(0xFE, 0xFF)
 
     def transfer_page_to_oam(page_num):
         nonlocal adh, adl
@@ -2263,6 +2271,20 @@ class Cart(object):
         print(f'Has 512-byte trainer: {self.trainer is not None}')
         print(f'Nametable mirroring: {nt_mirroring_descs[self.nt_mirroring]}')
         print(f'Console flavor: {console_flavors[self.console_flavor]}')
+
+    def decompile(self):
+        lines = []
+        i = 0
+        prg_rom = b"".join(self.prg_rom_banks)
+        while i < len(prg_rom):
+            op = prg_rom[i]
+            num_operands = INSTRUCTION_BYTES[op] or 1 # all ops have at least 2 operands
+            operands = [prg_rom[i+operand_i] for operand_i in range(num_operands)]
+            addr_mode_format = ADDR_MODE_FORMATS[INSTRUCTION_ADDR_MODES[op]]
+            line = f'{0x8000+i:04X} {INSTRUCTION_LABELS[op]}{addr_mode_format(None, i, operands)}'
+            lines.append(line)
+            i += num_operands
+        return '\n'.join(lines)
         
     def create_mapper_funcs(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
         return mappers[self.mapper_num](
@@ -2369,20 +2391,21 @@ class NES(object):
                         self.cpu_tick(); t += 1
                         ppu_t += 3
                     else: # if True:
-                        pc, s, a, x, y, p = self.cpu_inspect_regs()
-                        op = self.cpu_read(pc)
-                        num_operands = INSTRUCTION_BYTES[op]
-                        operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
-                        operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
-                        addr_mode = INSTRUCTION_ADDR_MODES[op]
-                        addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                        log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
-                        log_line += ' ' * (48-len(log_line))
-                        log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                        print(log_line)
+                        # pc, s, a, x, y, p = self.cpu_inspect_regs()
+                        # op = self.cpu_read(pc)
+                        # num_operands = INSTRUCTION_BYTES[op]
+                        # operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
+                        # operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
+                        # addr_mode = INSTRUCTION_ADDR_MODES[op]
+                        # addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
+                        # log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
+                        # log_line += ' ' * (48-len(log_line))
+                        # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                         
                         self.ppu_tick(); ppu_t += 1
-                        self.cpu_tick(); t += 1
+                        if self.cpu_tick():
+                            pass # print(log_line)
+                        t += 1
                         self.ppu_tick(); ppu_t += 1
                         self.ppu_tick(); ppu_t += 1
 
@@ -2392,7 +2415,6 @@ class NES(object):
                                     for x in range(341):
                                         screen_pixels[x,y] = rgbs[self.out_pixels[x+y*341]]
                             pygame.display.flip()
-                            print(f"flip t = {t}")
                             frame_start = t
         except VMStop:
             pygame.display.quit()
@@ -2402,16 +2424,21 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Curt NES v0.0.0')
     parser.add_argument('rom')
-    parser.add_argument('--print-cart-config', action='store_true')
-    parser.add_argument('--print-cpu-log', action='store_true')
+    parser.add_argument('--print-cart-config', default=False, action='store_true')
+    parser.add_argument('--print-cpu-log', default=False, action='store_true')
     parser.add_argument('--pal-filepath', '--pal')
-    parser.add_argument('--dump-chr-rom', action='store_true')
+    parser.add_argument('--dump-chr-rom', default=False, action='store_true')
+    parser.add_argument('--decompile', default=False, action='store_true')
     args = parser.parse_args()
 
     cart = Cart.from_file(args.rom)
 
     if args.print_cart_config:
         cart.print_config()
+        exit(0)
+
+    if args.decompile:
+        print(cart.decompile())
         exit(0)
 
     if args.dump_chr_rom:
