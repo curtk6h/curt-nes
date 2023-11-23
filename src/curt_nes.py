@@ -990,47 +990,56 @@ def create_ppu_funcs(
     def write_nothing():
         pass
     def write_ppu_ctrl():
-        nonlocal ppu_ctrl, tmp_addr
+        nonlocal ppu_ctrl, tmp_addr, reg_io_write_state
         if t < 29658:
             return  # TODO: figure out reg_io_value / reg_io_write_state
         if ppu_status & reg_io_value & ~ppu_ctrl & 0x80:
             trigger_nmi()
         ppu_ctrl = reg_io_value
         tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00 # base nametable address
+        reg_io_write_state = 0
     def write_ppu_mask():
-        nonlocal ppu_mask
+        nonlocal ppu_mask, reg_io_write_state
         ppu_mask = reg_io_value
+        reg_io_write_state = 0
     def write_oam_addr():
-        nonlocal oam_addr
+        nonlocal oam_addr, reg_io_write_state
         oam_addr = reg_io_value
+        reg_io_write_state = 0
     def write_oam_data():
-        nonlocal oam_addr
+        nonlocal oam_addr, reg_io_write_state
         # TODO: ignore write during rendering (+pre-rendering) but increment addr by 4
         # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
         oam[oam_addr] = reg_io_value
         oam_addr = (oam_addr+1) & 0xFF
+        reg_io_write_state = 0
     def write_ppu_scroll_0():
-        nonlocal fine_x_scroll, tmp_addr
+        nonlocal fine_x_scroll, tmp_addr, reg_io_write_state
         # ........ ...XXXXX (course X)
         fine_x_scroll = reg_io_value & 0x07
         tmp_addr ^= (tmp_addr^(reg_io_value>>3)) & 0x001F
+        reg_io_write_state = 8
     def write_ppu_scroll_1():
-        nonlocal tmp_addr
+        nonlocal tmp_addr, reg_io_write_state
         # .yyy..YY YYY..... (fine y, course Y)
         tmp_addr ^= (tmp_addr^((reg_io_value<<12)|(reg_io_value<<2))) & 0x73E0
+        reg_io_write_state = 0
     def write_ppu_addr_0():
-        nonlocal tmp_addr
+        nonlocal tmp_addr, reg_io_write_state
         # .0AAAAAA ........ (address high 6 bits + clear 14th bit)
         tmp_addr ^= (tmp_addr^((reg_io_value&0x3F)<<8)) & 0x7F00
+        reg_io_write_state = 8
     def write_ppu_addr_1():
-        nonlocal tmp_addr, ppu_addr
+        nonlocal tmp_addr, ppu_addr, reg_io_write_state
         # ........ AAAAAAAA (address low 8 bits)
         tmp_addr ^= (tmp_addr^reg_io_value) & 0x00FF
         ppu_addr = tmp_addr
+        reg_io_write_state = 0
     def write_ppu_data():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, reg_io_write_state
         store(ppu_addr, reg_io_value)
         ppu_addr = (ppu_addr + PPU_ADDR_INCREMENTS[ppu_ctrl&0x04]) & 0x3FFF
+        reg_io_write_state = 0
 
     reg_readers = [
         read_nothing,
@@ -1074,7 +1083,6 @@ def create_ppu_funcs(
         nonlocal reg_io_value, reg_io_write_state
         reg_io_value = value
         reg_writers[reg_idx+reg_io_write_state]()
-        reg_io_write_state ^= 8
 
     def write_oam(value):
         nonlocal reg_io_value
@@ -2340,7 +2348,7 @@ class NES(object):
             for i in range(0, 192, 3)
         ]
 
-        t = ppu_t = self.initial_t
+        t = self.initial_t
         try:
             if self.print_cpu_log:
                 while True:
@@ -2363,8 +2371,8 @@ class NES(object):
                 pygame.event.clear()
                 while not pygame.event.get(eventtype=pygame.QUIT):
                     if t <= 29658:
-                        self.cpu_tick(); t += 1
-                        ppu_t += 3
+                        self.cpu_tick()
+                        t += 1
                     else: # if True:
                         # pc, s, a, x, y, p = self.cpu_inspect_regs()
                         # op = self.cpu_read(pc)
@@ -2377,12 +2385,12 @@ class NES(object):
                         # log_line += ' ' * (48-len(log_line))
                         # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                         
-                        self.ppu_tick(); ppu_t += 1
-                        if self.cpu_tick():
-                            pass # print(log_line)
+                        self.ppu_tick()
+                        self.cpu_tick()
+                        self.ppu_tick()
+                        self.ppu_tick()
+
                         t += 1
-                        self.ppu_tick(); ppu_t += 1
-                        self.ppu_tick(); ppu_t += 1
 
                         if (t - frame_start) >= frame_duration:
                             with pygame.PixelArray(screen) as screen_pixels:
