@@ -735,7 +735,7 @@ def create_ppu_funcs(
 
         # Perform read instead of write if writing is disabled
         if disable_writes:
-            scanline_oam[scanline_oam_addr]
+            scanline_oam[scanline_oam_addr] # discard
         else:
             scanline_oam[scanline_oam_addr] = oam_byte  # oam_byte set by fetch_oam() in previous cycle
 
@@ -752,7 +752,11 @@ def create_ppu_funcs(
                 check_overflow = False
                 oam_addr = (oam_addr + 4) & 0x03 # increment oam_addr and re-align, correcting "diagonal" bug
             else:
-                oam_addr = (oam_addr + 5) # overflow incrementing "diagonal" bug (when checking overflow, but none found yet)
+                oam_addr += (~((oam_addr&0x03)+1)&0x04) + 1
+                # aka
+                # oam_addr += 1
+                # if oam_addr & 3:
+                #     oam_addr += 4
         elif disable_writes:
             # All 64 sprites checked OR 8 found and overflow found
             oam_addr += 4 # nothing to do / skip sprite
@@ -775,6 +779,7 @@ def create_ppu_funcs(
 
         if oam_addr > 0xFF:
             # All 64 sprites have been checked
+            check_overflow = False
             disable_writes = True
             scanline_oam_addr = 0x00
             oam_addr &= 0xFF
