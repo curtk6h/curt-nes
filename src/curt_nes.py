@@ -564,7 +564,9 @@ def create_ppu_funcs(
     sp_tiles_1   = array.array('B', (0 for _ in range(8))) # sprite pattern/tile slice (hi)
     sp_attrs     = array.array('B', (0 for _ in range(8))) # sprite attribute bytes
     sp_x_pos     = array.array('B', (0 for _ in range(8))) # sprite x positions
-    sp_pt_addr   = 0x00  # made up temporary storage for loading sprite pattern into regs
+    sp_fine_y    = 0x00  # made up temporary storage for loading sprite pattern into regs
+    sp_tile_num  = 0x00  #
+    sp_pt_addr   = 0x00  #
 
     def _flip_bits(b):
         # Thanks https://graphics.stanford.edu/~seander/bithacks.html
@@ -637,6 +639,7 @@ def create_ppu_funcs(
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
+        print("clear flags!")
 
     def fetch_sp_0():
         # __0H RRRR CCCC 0TTT
@@ -768,6 +771,7 @@ def create_ppu_funcs(
                 scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
+                print(f"copying sprite {oam_byte} w/ bytes {oam[oam_addr]} {oam[oam_addr+1]} {oam[oam_addr+2]}")
             else:
                 oam_addr += 4 # skip sprite
 
@@ -785,35 +789,28 @@ def create_ppu_funcs(
             oam_addr &= 0xFF
 
     def reset_sprite_eval():
-        nonlocal oam_bytes_to_copy, oam_byte, disable_writes, check_overflow, oam_addr
+        nonlocal oam_bytes_to_copy, oam_byte, disable_writes, check_overflow, oam_addr, zero_sprite_on_scanline
         oam_bytes_to_copy = 0
         oam_byte = 0
         disable_writes = False
         check_overflow = False
         oam_addr = 0x00
+        zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
 
     def load_sp_y():
-        nonlocal sp_pt_addr
+        nonlocal sp_fine_y
         # This is the same calc for 8x8 and 8x16 sprites,
         # since second pattern immediately follows first when 8x16.
         # For 8x8 the value range will be 0 - 7 and 8x16 it'll be 0 - 15.
-        fine_y = scanline_num - scanline_oam[scanline_oam_addr+0]
-        if sp_attrs[scanline_oam_addr>>2]&0x80: # flip y
-            fine_y = (8<<((ppu_ctrl&0x20)>>5)) - fine_y
-        # Put upper bit of fine y (that's currently sitting in "plane" bit of a pattern address)
-        # into lowest "column" bit to indicate the NEXT tile
-        sp_pt_addr = ((fine_y<<1)&0x10) | (fine_y&0x7)
+        sp_fine_y = scanline_num - scanline_oam[scanline_oam_addr+0]
+        #print(f"scanline num/t {frame_num} {scanline_num} {scanline_t}) found sprite fine y for {scanline_oam_addr//4} = {sp_pt_addr} | {fine_y} ({scanline_num} - {scanline_oam[scanline_oam_addr+0]}) + attrs = {sp_attrs[scanline_oam_addr>>2]}")
         reset_sprite_eval()
 
     def load_sp_tile_num():
-        nonlocal sp_pt_addr
-        tile_num = scanline_oam[scanline_oam_addr+1]
-        if ppu_ctrl&0x20:
-            # For 8x16 sprites: the first bit indicates bank (=> __0C RRRR CCCT PTTT)
-            sp_pt_addr |= ((tile_num<<12)|(tile_num<<4)) & 0x1FE0
-        else:
-            # For 8x 8 sprites: use bank specified in ppu_ctrl like nametables does (=> __0H RRRR CCCC PTTT)
-            sp_pt_addr |= ((ppu_ctrl&0x08)<<9) | (tile_num<<4)
+        nonlocal sp_tile_num
+        sp_tile_num = scanline_oam[scanline_oam_addr+1]
+
+        #print(f"found sprite pattern addr for {scanline_oam_addr//4} = {sp_pt_addr} | {(ppu_ctrl&0x08)} | {tile_num}")
         reset_sprite_eval()
         
     def load_sp_attr():
@@ -821,7 +818,26 @@ def create_ppu_funcs(
         reset_sprite_eval()
 
     def load_sp_x():
+        nonlocal sp_pt_addr
+
         sp_x_pos[scanline_oam_addr>>2] = scanline_oam[scanline_oam_addr+3]
+
+        if sp_attrs[scanline_oam_addr>>2] & 0x80: # flip vertical
+            final_sp_fine_y = (8<<((ppu_ctrl&0x20)>>5)) - 1 - sp_fine_y
+        else:
+            final_sp_fine_y = sp_fine_y
+
+        # Put upper bit of fine y (that's currently sitting in "plane" bit of a pattern address)
+        # into lowest "column" bit to indicate the NEXT tile
+        sp_pt_addr = ((final_sp_fine_y<<1)&0x10) | (final_sp_fine_y&0x7)
+        
+        if ppu_ctrl&0x20:
+            # For 8x16 sprites: the first bit indicates bank (=> __0C RRRR CCCT PTTT)
+            sp_pt_addr |= ((sp_tile_num<<12)|(sp_tile_num<<4)) & 0x1FE0
+        else:
+            # For 8x 8 sprites: use bank specified in ppu_ctrl like nametables does (=> __0H RRRR CCCC PTTT)
+            sp_pt_addr |= ((ppu_ctrl&0x08)<<9) | (sp_tile_num<<4)
+
         reset_sprite_eval()
 
     def fetch_sp_x():
@@ -860,11 +876,11 @@ def create_ppu_funcs(
     ] * 2
 
     def next_pixel():
-        nonlocal tile_0, tile_1, attr, attr_n, ppu_status, zero_sprite_on_scanline
+        nonlocal tile_0, tile_1, attr, attr_n, ppu_status
         
         # Get background pixel
-        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t < 8):
-            # Rendering is OFF entirely or for the left-most column
+        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8):
+            # Rendering is OFF entirely for the left-most column
             pixel = 0x00
         else:
             # Rendering is ON
@@ -872,15 +888,15 @@ def create_ppu_funcs(
             if pixel != 0:
                 pixel |= attr
 
-            # Shift background registers
-            if scanline_t & 7:
-                tile_0 <<= 1
-                tile_1 <<= 1
-            else:
-                tile_0 = ((tile_0<<1)&0xFFFF) | next_0
-                tile_1 = ((tile_1<<1)&0xFFFF) | next_1
-                attr   = attr_n
-                attr_n = attr_tmp
+        # Shift background registers
+        if scanline_t & 7:
+            tile_0 <<= 1
+            tile_1 <<= 1
+        else:
+            tile_0 = ((tile_0<<1)&0xFFFF) | next_0
+            tile_1 = ((tile_1<<1)&0xFFFF) | next_1
+            attr   = attr_n
+            attr_n = attr_tmp
 
         # Get first active sprite pixel, if it's non-zero, and either:
         # background pixel is zero or priority is not set to background
@@ -893,27 +909,27 @@ def create_ppu_funcs(
             while sp_idx < 8:
                 if sp_x_pos[sp_idx] == 0:  # skip sprites that are ahead of current position on scanline
                     sp_pixel = ((sp_tiles_0[sp_idx]&0x80)>>7) | ((sp_tiles_1[sp_idx]&0x80)>>6)
-                    if sp_pixel != 0 and ((pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0):
-                        if sp_idx == 0:
-                            if (pixel&0x03) != 0: # there must be background pixel for a hit to occur
-                                ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
-                            zero_sprite_on_scanline = zero_sprite_on_next_scanline # copy next scanline flag either way
-                        pixel = 0x10 | ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
-                        break
+                    if sp_pixel != 0:
+                        if sp_idx == 0 and (pixel&0x03) != 0: # there must be background pixel for a hit to occur
+                            ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                        if (pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0:
+                            pixel = 0x10 | ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
+                            break
                 sp_idx += 1
 
-            # Decrement sprite x counters, shift sprite registers
-            # NOTE: wiki says that x position is decremented before rendering,
-            # but then sprites would be offset by 1 pixel and it just seems wrong?
-            # Is this a broader misinterpretation by me (ex. like "first active sprite pixel"
-            # not exactly what's happening -- maybe the loop decrements back from 8th sprite to 0th?)?
+        sp_idx = 0
+        while sp_idx < 8:
+            if sp_x_pos[sp_idx] == 0:  # skip sprites that are ahead of current position on scanline
+                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
+                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
+            sp_idx += 1
+
+        if scanline_num >= 1 and scanline_t < 256:
+            # Decrement sprite x counters
             sp_idx = 0
             while sp_idx < 8:
                 if sp_x_pos[sp_idx] > 0:
                     sp_x_pos[sp_idx] -= 1
-                else:
-                    sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
-                    sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
                 sp_idx += 1
 
         return pixel
@@ -1609,6 +1625,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
         nonlocal pc, adh
         adh = fetch(pc); pc += 1
         pc = (adh<<8) | adl
+        print(f"jumping to {pc}")
         return next_ir
     def jmp_indirect():
         nonlocal pc, ial
@@ -1803,6 +1820,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     def rts_implied_4():
         nonlocal pc
         fetch(pc); pc += 1 # discard
+        print("RTS'ing")
         return next_ir
 
     # SBC (SuBtract with Carry)
@@ -1816,6 +1834,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     # STA (STore Accumulator)
     @write_op
     def sta():
+        print(f"sta = {a}")
         return a
     
     # Stack Instructions
@@ -1873,6 +1892,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     # STX (STore X register)
     @write_op
     def stx():
+        print(f"storing x {x}")
         return x
 
     # STY (STore Y register)
