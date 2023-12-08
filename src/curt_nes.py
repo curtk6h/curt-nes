@@ -28,6 +28,7 @@
 
 import array
 import os
+import sys
 
 # Memory addressing
 ZERO_PAGE_OFFSET         = 0x0000
@@ -639,7 +640,6 @@ def create_ppu_funcs(
     def clear_flags():
         nonlocal ppu_status
         ppu_status &= 0x1F
-        print("clear flags!")
 
     def fetch_sp_0():
         # __0H RRRR CCCC 0TTT
@@ -771,7 +771,6 @@ def create_ppu_funcs(
                 scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
-                print(f"copying sprite {oam_byte} w/ bytes {oam[oam_addr]} {oam[oam_addr+1]} {oam[oam_addr+2]}")
             else:
                 oam_addr += 4 # skip sprite
 
@@ -803,14 +802,11 @@ def create_ppu_funcs(
         # since second pattern immediately follows first when 8x16.
         # For 8x8 the value range will be 0 - 7 and 8x16 it'll be 0 - 15.
         sp_fine_y = scanline_num - scanline_oam[scanline_oam_addr+0]
-        #print(f"scanline num/t {frame_num} {scanline_num} {scanline_t}) found sprite fine y for {scanline_oam_addr//4} = {sp_pt_addr} | {fine_y} ({scanline_num} - {scanline_oam[scanline_oam_addr+0]}) + attrs = {sp_attrs[scanline_oam_addr>>2]}")
         reset_sprite_eval()
 
     def load_sp_tile_num():
         nonlocal sp_tile_num
         sp_tile_num = scanline_oam[scanline_oam_addr+1]
-
-        #print(f"found sprite pattern addr for {scanline_oam_addr//4} = {sp_pt_addr} | {(ppu_ctrl&0x08)} | {tile_num}")
         reset_sprite_eval()
         
     def load_sp_attr():
@@ -879,7 +875,7 @@ def create_ppu_funcs(
         nonlocal tile_0, tile_1, attr, attr_n, ppu_status
         
         # Get background pixel
-        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8):
+        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_num >= 240:
             # Rendering is OFF entirely for the left-most column
             pixel = 0x00
         else:
@@ -900,7 +896,7 @@ def create_ppu_funcs(
 
         # Get first active sprite pixel, if it's non-zero, and either:
         # background pixel is zero or priority is not set to background
-        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_t >= 256:
+        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_num >= 240 or scanline_t >= 256:
             # Rendering is OFF entirely or for the left-most column
             pass
         else:
@@ -917,19 +913,15 @@ def create_ppu_funcs(
                             break
                 sp_idx += 1
 
-        sp_idx = 0
-        while sp_idx < 8:
-            if sp_x_pos[sp_idx] == 0:  # skip sprites that are ahead of current position on scanline
-                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
-                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
-            sp_idx += 1
-
         if scanline_num >= 1 and scanline_t < 256:
             # Decrement sprite x counters
             sp_idx = 0
             while sp_idx < 8:
                 if sp_x_pos[sp_idx] > 0:
                     sp_x_pos[sp_idx] -= 1
+                else:
+                    sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
+                    sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
                 sp_idx += 1
 
         return pixel
@@ -1625,7 +1617,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
         nonlocal pc, adh
         adh = fetch(pc); pc += 1
         pc = (adh<<8) | adl
-        print(f"jumping to {pc}")
         return next_ir
     def jmp_indirect():
         nonlocal pc, ial
@@ -1820,7 +1811,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     def rts_implied_4():
         nonlocal pc
         fetch(pc); pc += 1 # discard
-        print("RTS'ing")
         return next_ir
 
     # SBC (SuBtract with Carry)
@@ -1834,7 +1824,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     # STA (STore Accumulator)
     @write_op
     def sta():
-        print(f"sta = {a}")
         return a
     
     # Stack Instructions
@@ -1892,7 +1881,6 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     # STX (STore X register)
     @write_op
     def stx():
-        print(f"storing x {x}")
         return x
 
     # STY (STore Y register)
@@ -2450,7 +2438,6 @@ if __name__ == "__main__":
         exit(0)
 
     if args.dump_chr_rom:
-        import sys
         sys.stdout.buffer.write(cart.chr_rom_banks[0])
         exit(0)
 
