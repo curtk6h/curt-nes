@@ -580,7 +580,7 @@ def create_ppu_funcs(
         pass
 
     def fetch_nt():
-        nonlocal pt_addr
+        nonlocal pt_addr, tile_0, tile_1, attr, attr_n
         # _yyy NN YYYYY XXXXX
         #  ||| || ||||| +++++-- coarse X scroll
         #  ||| || +++++-------- coarse Y scroll
@@ -588,6 +588,11 @@ def create_ppu_funcs(
         #  +++----------------- fine Y scroll
         # _yyy NNYY YYYX XXXX => _000 NNYY YYYX XXXX => ____ RRRR CCCC ____ (__0H RRRR CCCC 0TTT)
         pt_addr = fetch(0x2000|(ppu_addr&0x0FFF)) << 4
+        # sneak this here (timed with pixel rendering / tile shifting)
+        tile_0 |= next_0
+        tile_1 |= next_1
+        attr   = attr_n
+        attr_n = attr_tmp
 
     def fetch_at():
         nonlocal attr_tmp
@@ -607,13 +612,13 @@ def create_ppu_funcs(
         next_1 = fetch(((ppu_ctrl&0x10)<<8)|pt_addr|8|(ppu_addr>>12))
 
     def inc_x():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, tile_0, tile_1, attr, attr_n
         # _yyy NNYY YYYX XXXX => _yyy NnYY YYYx xxxx (x=X+1, n=carry)
         x = (ppu_addr&0x001F) + 1
         ppu_addr ^= (ppu_addr^((x<<5)|x)) & 0x041F
 
     def inc_xy():
-        nonlocal ppu_addr
+        nonlocal ppu_addr, tile_0, tile_1, attr, attr_n
         # _yyy NNYY YYYX XXXX => _yyy nnyy yyyx xxxx
         fine_y_x = (ppu_addr&0x701F) + 0x1001  # add 1 to fine y and coarse x, at the same time
         y = (ppu_addr&0x03E0) + ((fine_y_x&0x8000)>>10)
@@ -650,17 +655,17 @@ def create_ppu_funcs(
         sp_tiles_1[scanline_oam_addr>>2] = flip_bits(fetch(sp_pt_addr|8)) if sp_attrs[scanline_oam_addr>>2]&0x40 else fetch(sp_pt_addr|8)
 
     fetch_next_tile_funcs = [
-        idle,             fetch_nt, # this one's different to allow easy overriding on pre-render line
+        fetch_nt,         idle,
         fetch_at,         idle,
         fetch_bg_0,       idle,
         fetch_bg_1,       inc_x
     ]
     
     fetch_next_sprites_funcs = [
-        idle,             fetch_nt, # the two nt fetches done here don't serve any purpose
-        fetch_nt,         idle,     #
+        fetch_nt,         idle, # the two nt fetches here don't serve any purpose
+        fetch_nt,         idle, #
         fetch_sp_0,       idle,
-        fetch_sp_1,       idle,     # timing of fetch_sp_1 aligns with incrementing scanline_oam_addr below
+        fetch_sp_1,       idle, # timing of fetch_sp_1 aligns with incrementing scanline_oam_addr below
     ]
 
     visible_scanline_funcs = (
@@ -673,13 +678,14 @@ def create_ppu_funcs(
         # Cycles 321 - 336: Fetch first two tiles for the next scanline
         fetch_next_tile_funcs * 2 +
         # Cycles 337 - 340: Fetch nametable byte twice for unknown reason
-        [idle, fetch_nt] * 2
+        [fetch_nt, idle] * 2
     )
     visible_scanline_funcs[256] = inc_xy
     visible_scanline_funcs[257] = reset_x
 
     pre_render_scanline_funcs = list(visible_scanline_funcs)
     pre_render_scanline_funcs[1] = clear_flags
+    pre_render_scanline_funcs[2] = fetch_nt # do fetch_nt in the cycle after
     for i in range(280, 305):
         pre_render_scanline_funcs[i] = reset_y
 
@@ -690,6 +696,7 @@ def create_ppu_funcs(
 
     pre_render_scanline_funcs_no_render = list(vblank_scanline_funcs)
     pre_render_scanline_funcs_no_render[1] = clear_flags
+    pre_render_scanline_funcs_no_render[2] = fetch_nt # do fetch_nt in the cycle after
 
     post_render_scanline_funcs = vblank_scanline_funcs
     
@@ -871,13 +878,13 @@ def create_ppu_funcs(
         [idle_scanline] * (262-240)
     ] * 2
 
-    def next_pixel():
-        nonlocal tile_0, tile_1, attr, attr_n, ppu_status
+    def render_bg_pixel(pixel):
+        nonlocal tile_0, tile_1
         
         # Get background pixel
-        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_num >= 240:
+        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8) or scanline_num >= 240:
             # Rendering is OFF entirely for the left-most column
-            pixel = 0x00
+            pass
         else:
             # Rendering is ON
             pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
@@ -885,14 +892,13 @@ def create_ppu_funcs(
                 pixel |= attr
 
         # Shift background registers
-        if scanline_t & 7:
-            tile_0 <<= 1
-            tile_1 <<= 1
-        else:
-            tile_0 = ((tile_0<<1)&0xFFFF) | next_0
-            tile_1 = ((tile_1<<1)&0xFFFF) | next_1
-            attr   = attr_n
-            attr_n = attr_tmp
+        tile_0 = (tile_0<<1) & 0xFFFF
+        tile_1 = (tile_1<<1) & 0xFFFF
+
+        return pixel
+    
+    def render_sp_pixel(pixel):
+        nonlocal ppu_status
 
         # Get first active sprite pixel, if it's non-zero, and either:
         # background pixel is zero or priority is not set to background
@@ -913,7 +919,7 @@ def create_ppu_funcs(
                             break
                 sp_idx += 1
 
-        if scanline_num >= 1 and scanline_t < 256:
+        if scanline_num >= 1 and scanline_t < 256:                
             # Decrement sprite x counters
             sp_idx = 0
             while sp_idx < 8:
@@ -928,7 +934,7 @@ def create_ppu_funcs(
 
     def render_pixel():
         nonlocal frame_num, scanline_num, scanline_t
-        out_pixels[scanline_num*341+scanline_t] = pals[next_pixel()] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
+        out_pixels[scanline_num*341+scanline_t] = pals[render_sp_pixel(render_bg_pixel(0x00))] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
         scanline_t   += 1
         scanline_num += scanline_t // 341
         frame_num    += scanline_num // 262
@@ -974,9 +980,9 @@ def create_ppu_funcs(
             no_tick_funcs[frame_num&1][scanline_num][scanline_t]() # TODO: look at this more
             skip_pixel()
         else:
+            render_funcs [frame_num&1][scanline_num][scanline_t]()
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
             sp_tick_funcs[frame_num&1][scanline_num][scanline_t]()
-            render_funcs [frame_num&1][scanline_num][scanline_t]()
         t += 1
 
     def read_nothing():
