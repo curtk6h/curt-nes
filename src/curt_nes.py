@@ -546,8 +546,8 @@ def create_ppu_funcs(
     frame_num    = 0
     scanline_t   = 0
     scanline_oam_addr = 0
-    zero_sprite_on_scanline = 0x00
-    zero_sprite_on_next_scanline = 0x00
+    zero_sprite_on_scanline = False
+    zero_sprite_on_next_scanline = False
 
     # rendering registers/latches/memory
     # background
@@ -774,7 +774,7 @@ def create_ppu_funcs(
             # Normal operation, check for sprites on scanline
             if oam_byte <= scanline_num < (oam_byte+8+((ppu_ctrl&0x20)>>2)): # sprite is on this scanline?
                 if scanline_oam_addr == 0x00:
-                    zero_sprite_on_next_scanline = 0x40 if oam_addr == 0x00 else 0x00
+                    zero_sprite_on_next_scanline = oam_addr == 0x00
                 scanline_oam_addr += 1 # start copying
                 oam_addr += 1
                 oam_bytes_to_copy = 3
@@ -881,12 +881,11 @@ def create_ppu_funcs(
     def render_bg_pixel(pixel):
         nonlocal tile_0, tile_1
         
-        # Get background pixel
-        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8) or scanline_num >= 240:
+        # Determine background pixel
+        if (ppu_mask&0x08) == 0 or ((ppu_mask&0x02) == 0 and scanline_t <= 8):
             # Rendering is OFF entirely for the left-most column
-            pass
+            pixel = 0x00
         else:
-            # Rendering is ON
             pixel = (((tile_0<<fine_x_scroll>>1)&0x4000)|((tile_1<<fine_x_scroll)&0x8000)) >> 14
             if pixel != 0:
                 pixel |= attr
@@ -900,48 +899,51 @@ def create_ppu_funcs(
     def render_sp_pixel(pixel):
         nonlocal ppu_status
 
-        # Get first active sprite pixel, if it's non-zero, and either:
-        # background pixel is zero or priority is not set to background
-        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8) or scanline_num < 1 or scanline_num >= 240 or scanline_t >= 256:
-            # Rendering is OFF entirely or for the left-most column
+        # Determine first active sprite pixel
+        if (ppu_mask&0x10) == 0 or ((ppu_mask&0x04) == 0 and scanline_t <= 8):
+            # Rendering is OFF entirely for the left-most column
             pass
         else:
-            # Rendering is ON
             sp_idx = 0
             while sp_idx < 8:
                 if sp_x_pos[sp_idx] == 0:  # skip sprites that are ahead of current position on scanline
-                    sp_pixel = ((sp_tiles_0[sp_idx]&0x80)>>7) | ((sp_tiles_1[sp_idx]&0x80)>>6)
+                    sp_pixel = ((sp_tiles_0[sp_idx]&0x80)>>7) | ((sp_tiles_1[sp_idx]&0x80)>>6)    
                     if sp_pixel != 0:
-                        if sp_idx == 0 and (pixel&0x03) != 0: # there must be background pixel for a hit to occur
-                            ppu_status |= zero_sprite_on_scanline  # sprite zero hit!
+                        # Zero sprite hit check
+                        if zero_sprite_on_scanline and sp_idx == 0 and (pixel&0x03) != 0 \
+                            and scanline_t <= 0xFF:  # emulates "obscure reason related to the pixel pipeline"
+                            ppu_status |= 0x40  # there was a hit!
+                        # Use sprite pixel if background pixel is zero or sprite priority is set to sprite
                         if (pixel&0x03) == 0 or (sp_attrs[sp_idx]&0x20) == 0:
                             pixel = 0x10 | ((sp_attrs[sp_idx]&0x03)<<2) | sp_pixel
                             break
                 sp_idx += 1
 
-        if scanline_num >= 1 and scanline_t < 256:                
-            # Decrement sprite x counters
-            sp_idx = 0
-            while sp_idx < 8:
-                if sp_x_pos[sp_idx] > 0:
-                    sp_x_pos[sp_idx] -= 1
-                else:
-                    sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
-                    sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
-                sp_idx += 1
+        # Decrement sprite x counters
+        sp_idx = 0
+        while sp_idx < 8:
+            if sp_x_pos[sp_idx] > 0:
+                sp_x_pos[sp_idx] -= 1
+            else:
+                sp_tiles_0[sp_idx] = (sp_tiles_0[sp_idx]<<1) & 0xFF
+                sp_tiles_1[sp_idx] = (sp_tiles_1[sp_idx]<<1) & 0xFF
+            sp_idx += 1
 
         return pixel
 
-    def render_pixel():
+    def render_visible_pixel():
         nonlocal frame_num, scanline_num, scanline_t
-        out_pixels[scanline_num*341+scanline_t] = pals[render_sp_pixel(render_bg_pixel(0x00))] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
-        scanline_t   += 1
-        scanline_num += scanline_t // 341
-        frame_num    += scanline_num // 262
-        scanline_num %= 262
-        scanline_t   %= 341
+        out_pixels[scanline_num*341+scanline_t] = \
+            pals[render_sp_pixel(render_bg_pixel(0x00))] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
+        next_pixel()
 
-    def skip_pixel():
+    def render_hblank_pixel():
+        nonlocal frame_num, scanline_num, scanline_t
+        out_pixels[scanline_num*341+scanline_t] = \
+            pals[render_bg_pixel(0x00)] & (0x30 if ppu_mask&1 else -1) # TODO: use pal memory accessor
+        next_pixel()
+
+    def next_pixel():
         nonlocal frame_num, scanline_num, scanline_t
         scanline_t   += 1
         scanline_num += scanline_t // 341
@@ -955,21 +957,28 @@ def create_ppu_funcs(
         scanline_num  = 0
         scanline_t    = 0
 
-    render_scanline_funcs = (
-        [skip_pixel]               +  # idle
-        [render_pixel] * (257-1)   +  # visible pixels
-        [render_pixel] * (337-257) +  # hblank, junk + next line tiles
-        [skip_pixel]   * (341-337)    # hblank, unknown
+    render_visible_scanline_funcs = (
+        [next_pixel]                       +  # idle
+        [render_visible_pixel] * (257-1)   +  # visible pixels
+        [render_hblank_pixel]  * (337-257) +  # hblank, junk + next line tiles
+        [next_pixel]           * (341-337)    # hblank, unknown
     )
 
-    last_render_scanline_odd_frame_funcs = render_scanline_funcs[:-2] + [next_frame]
+    render_vblank_scanline_funcs = (
+        [next_pixel]                      +  # idle
+        [render_hblank_pixel] * (257-1)   +  # visible pixels
+        [render_hblank_pixel] * (337-257) +  # hblank, junk + next line tiles
+        [next_pixel]          * (341-337)    # hblank, unknown
+    )
+
+    last_render_scanline_odd_frame_funcs = render_vblank_scanline_funcs[:-2] + [next_frame]
     
     render_funcs = [
-        [render_scanline_funcs] * (240)     +  # visible scanlines
-        [render_scanline_funcs] * (262-240)    # vblank
+        [render_visible_scanline_funcs] * (240)     +  # visible scanlines
+        [render_vblank_scanline_funcs]  * (262-240)    # vblank
         ,
-        [render_scanline_funcs] * (240)     +  # visible scanlines
-        [render_scanline_funcs] * (262-239) +  # vblank
+        [render_visible_scanline_funcs] * (240)     +  # visible scanlines
+        [render_vblank_scanline_funcs]  * (262-239) +  # vblank
         [last_render_scanline_odd_frame_funcs] # skip last cycle (TODO: skip first cycle of first visible scanline instead?)
     ]
 
@@ -978,7 +987,7 @@ def create_ppu_funcs(
         if (ppu_mask&0x18) == 0:
             # TODO: lots more cleanup to do here
             no_tick_funcs[frame_num&1][scanline_num][scanline_t]() # TODO: look at this more
-            skip_pixel()
+            next_pixel()
         else:
             render_funcs [frame_num&1][scanline_num][scanline_t]()
             bg_tick_funcs[frame_num&1][scanline_num][scanline_t]()
