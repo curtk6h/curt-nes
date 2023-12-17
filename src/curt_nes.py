@@ -1034,22 +1034,18 @@ def create_ppu_funcs(
             trigger_nmi()
         ppu_ctrl = reg_io_value
         tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00 # base nametable address
-        #reg_io_write_state = 0
     def write_ppu_mask():
         nonlocal ppu_mask, reg_io_write_state
         ppu_mask = reg_io_value
-        #reg_io_write_state = 0
     def write_oam_addr():
         nonlocal oam_addr, reg_io_write_state
         oam_addr = reg_io_value
-        #reg_io_write_state = 0
     def write_oam_data():
         nonlocal oam_addr, reg_io_write_state
         # TODO: ignore write during rendering (+pre-rendering) but increment addr by 4
         # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
         oam[oam_addr] = reg_io_value
         oam_addr = (oam_addr+1) & 0xFF
-        #reg_io_write_state = 0
     def write_ppu_scroll_0():
         nonlocal fine_x_scroll, tmp_addr, reg_io_write_state
         # ........ ...XXXXX (course X)
@@ -1076,7 +1072,6 @@ def create_ppu_funcs(
         nonlocal ppu_addr, reg_io_write_state
         store(ppu_addr, reg_io_value)
         ppu_addr = (ppu_addr + PPU_ADDR_INCREMENTS[ppu_ctrl&0x04]) & 0x3FFF
-        #reg_io_write_state = 0
 
     reg_readers = [
         read_nothing,
