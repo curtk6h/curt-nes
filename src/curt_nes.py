@@ -219,7 +219,7 @@ NTSC_PALETTE = bytearray(b'RRR\x01\x1aQ\x0f\x0fe#\x06c6\x03K@\x04&?\t\x042\x13\x
 class VMStop(Exception):
     pass
 
-def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
+def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom_banks, chr_ram, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, con_read_reg, con_write_reg, nt_mirroring=NT_MIRRORING_VERTICAL):
     """
     The mapper is represented as a tuple of functions:
     (
@@ -241,7 +241,8 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
         # $1800–$1FFF	$0800
         # $2000–$2007	$0008	NES PPU regs
         # $2008–$3FFF	$1FF8	Mirrors of $2000–$2007 (repeats every 8 bytes)
-        # $4000–$4017	$0018	NES APU and I/O registers
+        # $4000–$4015	$0016	NES APU
+        # $4016-$4017   $0002   Controller registers
         # $4018–$401F	$0008	APU and I/O functionality that is normally disabled. See CPU Test Mode.
         # $4020–$FFFF	$BFE0	Cartridge space: PRG ROM, PRG RAM, and mapper registers (see note)
 
@@ -273,9 +274,13 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 [lambda addr: ppu_read_reg((addr-0x2000))] * 8 +
                 [lambda addr: ppu_read_reg((addr-0x2000)&7)] * (0x2000-8) + # mirrors
                 # apu
-                [lambda addr: apu_read_reg((addr-0x4000))] * 0x0020 +
+                [lambda addr: apu_read_reg((addr-0x4000))] * 0x0016 +
+                # con
+                [lambda _: 0x40|con_read_reg(0), lambda _: 0x40|con_read_reg(1)] +
+                # apu test mode
+                [lambda addr: apu_read_reg((addr-0x4000))] * 0x0008 +
                 # cart
-                [lambda addr: 0] * 0x1FE0 + # expansion rom?
+                [lambda _: 0] * 0x1FE0 + # expansion rom?
                 [lambda addr: prg_ram[addr-0x6000]] * 0x2000 + # prg ram
                 [lambda addr: prg_rom_bank_0[addr-0x8000]] * 0x4000 + # prg rom bank 0
                 [lambda addr: prg_rom_bank_1[addr-0xC000]] * 0x4000   # prg rom bank 1
@@ -294,7 +299,11 @@ def create_default_mapper_funcs(ram, vram, pals, prg_rom_banks, prg_ram, chr_rom
                 # dma / 0x4014
                 [write_oamdma] +
                 # apu / 0x4015
-                [lambda addr, value: apu_write_reg((addr-0x4000), value)] * 0x000B +
+                [lambda addr, value: apu_write_reg((addr-0x4000), value)] +
+                # con / 0x4016
+                [lambda _, value: con_write_reg(0, value)] +
+                # apu / 0x4017
+                [lambda addr, value: apu_write_reg((addr-0x4000), value)] * 0x0009 +
                 # cart
                 [lambda addr, value: None] * 0x1FE0 + # expansion rom?
                 [write_prg_ram] * 0x2000 + # prg ram
@@ -1025,22 +1034,22 @@ def create_ppu_funcs(
             trigger_nmi()
         ppu_ctrl = reg_io_value
         tmp_addr ^= (tmp_addr ^ (reg_io_value<<10)) & 0x0C00 # base nametable address
-        reg_io_write_state = 0
+        #reg_io_write_state = 0
     def write_ppu_mask():
         nonlocal ppu_mask, reg_io_write_state
         ppu_mask = reg_io_value
-        reg_io_write_state = 0
+        #reg_io_write_state = 0
     def write_oam_addr():
         nonlocal oam_addr, reg_io_write_state
         oam_addr = reg_io_value
-        reg_io_write_state = 0
+        #reg_io_write_state = 0
     def write_oam_data():
         nonlocal oam_addr, reg_io_write_state
         # TODO: ignore write during rendering (+pre-rendering) but increment addr by 4
         # TODO: if OAMADDR is not less than eight when rendering starts, the eight bytes starting at OAMADDR & 0xF8 are copied to the first eight bytes of OAM
         oam[oam_addr] = reg_io_value
         oam_addr = (oam_addr+1) & 0xFF
-        reg_io_write_state = 0
+        #reg_io_write_state = 0
     def write_ppu_scroll_0():
         nonlocal fine_x_scroll, tmp_addr, reg_io_write_state
         # ........ ...XXXXX (course X)
@@ -1067,7 +1076,7 @@ def create_ppu_funcs(
         nonlocal ppu_addr, reg_io_write_state
         store(ppu_addr, reg_io_value)
         ppu_addr = (ppu_addr + PPU_ADDR_INCREMENTS[ppu_ctrl&0x04]) & 0x3FFF
-        reg_io_write_state = 0
+        #reg_io_write_state = 0
 
     reg_readers = [
         read_nothing,
@@ -2168,6 +2177,43 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
         lambda: (pc, s, a, x, y, p)
     )
 
+def pygame_poll_controller_status(port):
+    import pygame
+    con_status = 0x00
+    if port == 0:
+        pressed_keys = pygame.key.get_pressed()
+        for key in [
+            pygame.K_a,
+            pygame.K_s,
+            pygame.K_TAB,
+            pygame.K_RETURN,
+            pygame.K_UP,
+            pygame.K_DOWN,
+            pygame.K_LEFT,
+            pygame.K_RIGHT,
+        ]:
+            con_status = (con_status<<1) | (1 if pressed_keys[key] else 0)
+    return con_status
+
+def create_con_funcs(poll_con_status):
+    strobe = False
+    con_status = [0x00, 0x00]
+    
+    def read(port):
+        if strobe:
+            con_status[port] = poll_con_status(port)
+        btn_status = (con_status[port]&0x80) >> 7
+        con_status[port] = (con_status[port]<<1) & 0xFF
+        return btn_status
+
+    def write(port, value):
+        nonlocal strobe
+        strobe = value & 1
+        if strobe:
+            con_status[port] = poll_con_status(port)
+
+    return (read, write)
+
 class Cart(object):
     def __init__(
         self,
@@ -2298,7 +2344,7 @@ class Cart(object):
             i += num_operands
         return '\n'.join(lines)
         
-    def create_mapper_funcs(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg):
+    def create_mapper_funcs(self, ram, vram, pals, cpu_transfer_page_to_oam, ppu_read_reg, ppu_write_reg, apu_read_reg, apu_write_reg, con_read, con_write):
         return mappers[self.mapper_num](
             ram,
             vram,
@@ -2312,6 +2358,8 @@ class Cart(object):
             ppu_write_reg,
             apu_read_reg,
             apu_write_reg,
+            con_read,
+            con_write,
             self.nt_mirroring
         )
 
@@ -2325,6 +2373,9 @@ class NES(object):
         self.ram = array.array('B', (0 for _ in range(0x800)))
         self.vram = array.array('B', (0 for _ in range(0x1000 if cart.nt_mirroring == NT_MIRRORING_FOUR_SCREEN else 0x800)))
         self.print_cpu_log = print_cpu_log
+        self.con_read,\
+        self.con_write = \
+            create_con_funcs(pygame_poll_controller_status)
         self.ppu_tick,\
         self.ppu_read_reg,\
         self.ppu_write_reg,\
@@ -2359,7 +2410,9 @@ class NES(object):
             self.ppu_read_reg,
             self.ppu_write_reg,
             apu_read_reg,
-            apu_write_reg)
+            apu_write_reg,
+            self.con_read,
+            self.con_write)
         self.cpu_connect(self.cpu_read, self.cpu_write, self.ppu_write_oam)
         self.ppu_connect(self.ppu_read, self.ppu_write, self.cpu_trigger_nmi)
 
