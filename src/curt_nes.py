@@ -6,6 +6,8 @@
 
 # TODO:
 # * test and cleanup:
+#   * cleanup entrypoint, including main loop and "print cpu log" option
+#   * fix background rendering glitch that probably relates to scrolling
 #   * sort out and tidy up rendering functions
 #   * improve performance!
 #   * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
@@ -16,7 +18,6 @@
 # * build first rom
 #   * (1) create .cfg file (2) compile do nothing program (3) compile program that loops 
 # * final features:
-#   * fix scrolling glitch
 #   * review docs for flags, glitches, exceptions, etc.
 #   * color emphasis settings from PPUMASK
 #   * mmc1
@@ -49,11 +50,6 @@ ROM_LOWER_BANK_OFFSET    = 0x8000
 ROM_BANK_SIZE            = 0x4000
 ROM_UPPER_BANK_OFFSET    = 0xC000
 TOTAL_ADDRESS_SPACE      = 0x10000
-
-# Interrupt types (internal to this emulator)
-NMI = 0
-RESET = 1
-IRQ = 2
 
 # Processor statuses
 N = 1 << 7  # negative
@@ -165,42 +161,7 @@ ADDR_MODE_FORMATS = [
     lambda cpu_read, pc, operands: ' ${:02X}'    .format(pc+2+signed8(operands[1])),
 ]
 
-# PPU memory constants
-PPUCTRL	  = 0x2000 # VPHB SINN	NMI enable (V), PPU master/slave (P), sprite height (H), background tile select (B), sprite tile select (S), increment mode (I), nametable select (NN)
-PPUMASK   = 0x2001 # BGRs bMmG	color emphasis (BGR), sprite enable (s), background enable (b), sprite left column enable (M), background left column enable (m), greyscale (G)
-PPUSTATUS = 0x2002 # VSO- ----	vblank (V), sprite 0 hit (S), sprite overflow (O); read resets write pair for $2005/$2006
-OAMADDR   = 0x2003 # aaaa aaaa	OAM read/write address
-OAMDATA   = 0x2004 # dddd dddd	OAM data read/write
-# VRAM reading and writing shares the same internal address register that rendering uses
-PPUSCROLL = 0x2005 # xxxx xxxx	fine scroll position (two writes: X scroll, Y scroll)
-PPUADDR   = 0x2006 # aaaa aaaa	PPU read/write address (two writes: most significant byte, least significant byte)
-PPUDATA   = 0x2007 # dddd dddd	PPU data read/write
-OAMDMA    = 0x4014 # aaaa aaaa	OAM DMA high address
-
-# If the PPU is currently in vertical blank, and the PPUSTATUS ($2002) vblank flag is still set (1), changing the NMI flag in bit 7 of $2000 from 0 to 1 will immediately generate an NMI. This can result in graphical errors (most likely a misplaced scroll) if the NMI routine is executed too late in the blanking period to finish on time. To avoid this problem it is prudent to read $2002 immediately before writing $2000 to clear the vblank flag.
-# After power/reset, writes to this register are ignored for about 30,000 cycles.
-PPUCTRL_V = 0x80 # Generate an NMI at the start of the vertical blanking interval (0: off; 1: on)
-PPUCTRL_P = 0x40 # PPU master/slave select (0: read backdrop from EXT pins; 1: output color on EXT pins)
-PPUCTRL_H = 0x20 # Sprite size (0: 8x8 pixels; 1: 8x16 pixels – see PPU OAM#Byte 1)
-PPUCTRL_B = 0x10 # Background pattern table address (0: $0000; 1: $1000)
-PPUCTRL_S = 0x08 # Sprite pattern table address for 8x8 sprites (0: $0000; 1: $1000; ignored in 8x16 mode)
-PPUCTRL_I = 0x04 # VRAM address increment per CPU read/write of PPUDATA (0: add 1, going across; 1: add 32, going down)
-PPUCTRL_N = 0x03 # Base nametable address (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
-
 PPU_ADDR_INCREMENTS = [1, 0, 0, 0, 32]
-
-PPUMASK_B = 0x80 # Emphasize blue
-PPUMASK_G = 0x40 # Emphasize green (red on PAL/Dendy)
-PPUMASK_R = 0x20 # Emphasize red (green on PAL/Dendy)
-PPUMASK_s = 0x10 # 1: Show sprites
-PPUMASK_b = 0x08 # 1: Show background
-PPUMASK_M = 0x04 # 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
-PPUMASK_m = 0x02 # 1: Show background in leftmost 8 pixels of screen, 0: Hide
-PPUMASK_g = 0x01 # Greyscale (0: normal color, 1: produce a greyscale display)
-
-PPUSTATUS_V = 0x80
-PPUSTATUS_S = 0x40
-PPUSTATUS_O = 0x20
 
 NT_MIRRORING_HORIZONTAL = 0
 NT_MIRRORING_VERTICAL = 1
@@ -2067,12 +2028,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
         nonlocal t, ir
         ir = ir()
         t += 1
-    def debug_tick():  # REMOVE ME
-        nonlocal t, ir
-        start_of_op = ir is next_ir
-        ir = ir()
-        t += 1
-        return start_of_op
+        return t
 
     def reset():
         nonlocal ial, iah, next_ir
@@ -2161,7 +2117,7 @@ def create_cpu_funcs(regs=None, stop_on_brk=False, skip_initial_reset=False, t=0
     ir = next_ir
 
     return (
-        debug_tick,
+        tick,
         reset,
         trigger_nmi,
         trigger_irq,
@@ -2414,15 +2370,7 @@ class NES(object):
         import time
         pygame.display.init()
         screen = pygame.display.set_mode(size=(341, 262)) #, flags=0, depth=0, display=0, vsync=0)
-        rgbs = [
-            (
-                self.pal[i+0],
-                self.pal[i+1],
-                self.pal[i+2]
-            )
-            for i in range(0, 192, 3)
-        ]
-
+        rgbs = [(self.pal[i+0], self.pal[i+1], self.pal[i+2]) for i in range(0, 192, 3)]
         t = self.initial_t
         try:
             if self.print_cpu_log:
@@ -2450,25 +2398,12 @@ class NES(object):
                     if t <= 29658:  # ppu is booting up
                         cpu_tick()
                         t += 1
-                    else: # if True:
-                        # pc, s, a, x, y, p = self.cpu_inspect_regs()
-                        # op = self.cpu_read(pc)
-                        # num_operands = INSTRUCTION_BYTES[op]
-                        # operands = [(self.cpu_read(pc+operand_i) if operand_i < num_operands else None) for operand_i in range(3)]
-                        # operands_text = ' '.join(['  ' if operand is None else f'{operand:02X}' for operand in operands])
-                        # addr_mode = INSTRUCTION_ADDR_MODES[op]
-                        # addr_mode_format = ADDR_MODE_FORMATS[addr_mode]
-                        # log_line = f'{pc:04X}  {operands_text}  {INSTRUCTION_LABELS[op]}{addr_mode_format(self.cpu_read, pc, operands)}'
-                        # log_line += ' ' * (48-len(log_line))
-                        # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
-                        
+                    else:
                         ppu_tick()
                         cpu_tick()
                         ppu_tick()
                         ppu_tick()
-
                         t += 1
-
                         if (t-frame_start) >= frame_duration:
                             with pygame.PixelArray(screen) as screen_pixels:
                                 for y in range(262):
