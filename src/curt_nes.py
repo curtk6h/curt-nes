@@ -5,26 +5,24 @@
 #       closure appeared to be nearly twice as fast as using class attributes
 
 # TODO:
-# * tick / figure out initialization/syncing w/ cpu
-# * add pygame and draw to screen
-# * try out test ROMs!
-# * handle controllers
-# * review docs for flags, glitches, exceptions, etc.
-# * add unit tests for sprite rendering (may have to extract code to test it, or expose individuals rendering funcs)
-# * refactor ppu reads/writes (so they all go through single calls and make sense w/ sp eval)
-# * remove unused constants etc
-# * default status to unused = 1 and removed redundant sets
-# * lots of cleanup / refactoring
-#   * break instructions into single cycles
-# * test interrupts
-# * build tiny sample rom that runs in working emulator
+# * test and cleanup:
+#   * sort out and tidy up rendering functions
+#   * improve performance!
+#   * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
+#   * refactor ppu reads/writes (so they all go through single calls and make sense w/ sp eval)
+#   * remove unused constants etc
+#   * default status to unused = 1 and removed redundant sets
+#   * unit test interrupts
+# * build first rom
 #   * (1) create .cfg file (2) compile do nothing program (3) compile program that loops 
-# FUTURE TO DOS:
-# * color emphasis settings from PPUMASK
-# * show sprite/background in leftmost 8 pixels settings from PPUMASK
-# * check if carry is supposed to only be set/reset per adc, sbc (not both within each op)
-# * use "massive" lookups to set flags?
-# * or at least, reduce flags setting as much as possible (ex. ((r>>8)&X) == (r>>8)) OR p ^= (p ^ a) & MASK etc)
+# * final features:
+#   * fix scrolling glitch
+#   * review docs for flags, glitches, exceptions, etc.
+#   * color emphasis settings from PPUMASK
+#   * mmc1
+#   * ntsc tv rendering
+#   * apu? (only if frame rate is "reasonable")
+#   * pal
 
 import array
 import os
@@ -600,8 +598,8 @@ def create_ppu_funcs(
         # sneak this here (timed with pixel rendering / tile shifting)
         tile_0 |= next_0
         tile_1 |= next_1
-        attr   = attr_n
-        attr_n = attr_tmp
+        attr    = attr_n
+        attr_n  = attr_tmp
 
     def fetch_at():
         nonlocal attr_tmp
@@ -1013,7 +1011,7 @@ def create_ppu_funcs(
     def read_oam_data():
         nonlocal reg_io_value
         reg_io_value = oam[oam_addr] # TODO: return 0xFF if in cycles 1 - 64 of scanline
-        # NOTE: it seems that oam_addr doesn't get incremented
+        # NOTE: oam_addr only gets incremented in write
     def read_ppu_data():
         nonlocal reg_io_value, ppu_data, ppu_addr
         if ppu_addr >= 0x3F00:
@@ -1118,7 +1116,7 @@ def create_ppu_funcs(
 
     def write_oam(value):
         nonlocal reg_io_value
-        reg_io_value = value # NOTE: I think this is how the value gets to write_oam_data?
+        reg_io_value = value # NOTE: not sure if this is right
         write_oam_data()
 
     def connect(ppu_read, ppu_write, cpu_trigger_nmi):
@@ -2413,8 +2411,9 @@ class NES(object):
 
     def play(self):
         import pygame
+        import time
         pygame.display.init()
-        screen = pygame.display.set_mode(size=(341, 262)) # , flags=0, depth=0, display=0, vsync=0)
+        screen = pygame.display.set_mode(size=(341, 262)) #, flags=0, depth=0, display=0, vsync=0)
         rgbs = [
             (
                 self.pal[i+0],
@@ -2444,10 +2443,12 @@ class NES(object):
             else:
                 frame_duration = int(113.667*262)
                 frame_start = t
+                frame_start_irl_t = time.time()
                 pygame.event.clear()
+                cpu_tick, ppu_tick, out_pixels = self.cpu_tick, self.ppu_tick, self.out_pixels
                 while not pygame.event.get(eventtype=pygame.QUIT):
-                    if t <= 29658:
-                        self.cpu_tick()
+                    if t <= 29658:  # ppu is booting up
+                        cpu_tick()
                         t += 1
                     else: # if True:
                         # pc, s, a, x, y, p = self.cpu_inspect_regs()
@@ -2461,19 +2462,22 @@ class NES(object):
                         # log_line += ' ' * (48-len(log_line))
                         # log_line += f'A:{a:02X} X:{x:02X} Y:{y:02X} P:{p:02X} SP:{s:02X} CYC:{t}'
                         
-                        self.ppu_tick()
-                        self.cpu_tick()
-                        self.ppu_tick()
-                        self.ppu_tick()
+                        ppu_tick()
+                        cpu_tick()
+                        ppu_tick()
+                        ppu_tick()
 
                         t += 1
 
-                        if (t - frame_start) >= frame_duration:
+                        if (t-frame_start) >= frame_duration:
                             with pygame.PixelArray(screen) as screen_pixels:
                                 for y in range(262):
                                     for x in range(341):
-                                        screen_pixels[x,y] = rgbs[self.out_pixels[x+y*341]]
+                                        screen_pixels[x,y] = rgbs[out_pixels[x+y*341]]
                             pygame.display.flip()
+                            irl_t = time.time()
+                            print(f"fps = {1.0 / (irl_t-frame_start_irl_t)}")
+                            frame_start_irl_t = irl_t
                             frame_start = t
         except VMStop:
             pygame.display.quit()
